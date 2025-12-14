@@ -1,0 +1,463 @@
+"""
+Weather data client combining Open-Meteo and NWS APIs.
+
+Key responsibilities:
+1. Fetch forecasts from multiple models (GFS, ECMWF)
+2. Fetch official NWS forecast
+3. Normalize all forecasts to common format
+4. Handle API errors gracefully
+
+Both Open-Meteo and NWS APIs are FREE and require NO API key.
+"""
+
+import time
+import requests
+from datetime import datetime, date, timedelta
+from typing import List, Dict, Optional, Any
+from dataclasses import dataclass
+
+from config.locations import LOCATIONS, get_location
+from utils.logger import get_logger
+
+logger = get_logger("weather_client")
+
+
+@dataclass
+class Forecast:
+    """Represents a weather forecast from any source."""
+    source: str  # 'ecmwf', 'gfs', 'nws'
+    location: str  # Location key (e.g., "NYC")
+    forecast_time: datetime  # When the forecast was made
+    target_date: date  # Date being forecasted
+    high_temp_f: Optional[float]  # High temperature in Fahrenheit
+    low_temp_f: Optional[float]  # Low temperature in Fahrenheit
+    confidence: Optional[float] = None  # Confidence score if available
+    raw_data: Optional[dict] = None  # Raw API response for debugging
+
+
+@dataclass
+class ActualWeather:
+    """Represents actual observed weather data."""
+    location: str
+    date: date
+    high_temp_f: float
+    low_temp_f: float
+    source: str = "nws"
+
+
+class WeatherClient:
+    """
+    Client for fetching weather data from multiple sources.
+
+    Combines:
+    - Open-Meteo API (GFS and ECMWF models)
+    - NWS API (Official US forecasts)
+    - Open-Meteo Historical API (for backtesting)
+    """
+
+    OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+    OPEN_METEO_HISTORICAL_URL = "https://archive-api.open-meteo.com/v1/archive"
+    NWS_BASE_URL = "https://api.weather.gov"
+
+    def __init__(self):
+        """Initialize the weather client."""
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "WeatherKalshiTrader/1.0 (contact@example.com)",
+            "Accept": "application/json"
+        })
+
+        # Rate limiting
+        self._last_request_time = {}
+        self._min_intervals = {
+            "open_meteo": 0.5,  # 2 requests/second
+            "nws": 0.5  # 2 requests/second
+        }
+
+        logger.info("Weather client initialized")
+
+    def _rate_limit(self, api: str):
+        """Enforce rate limiting for specific API."""
+        last_time = self._last_request_time.get(api, 0)
+        min_interval = self._min_intervals.get(api, 0.5)
+        elapsed = time.time() - last_time
+
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+
+        self._last_request_time[api] = time.time()
+
+    def _request(self, url: str, params: dict = None, api: str = "open_meteo",
+                 retries: int = 3) -> Optional[dict]:
+        """
+        Make an API request with error handling and retries.
+
+        Args:
+            url: Full URL to request
+            params: Query parameters
+            api: API identifier for rate limiting
+            retries: Number of retries on failure
+
+        Returns:
+            Response JSON or None on failure
+        """
+        self._rate_limit(api)
+
+        for attempt in range(retries):
+            try:
+                response = self.session.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                return response.json()
+
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"{api} API request failed (attempt {attempt + 1}/{retries}): {e}")
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    logger.error(f"{api} API request failed after {retries} attempts")
+                    return None
+
+        return None
+
+    def get_open_meteo_forecast(self, location_key: str,
+                                 models: List[str] = None) -> List[Forecast]:
+        """
+        Fetch forecasts from Open-Meteo API for multiple models.
+
+        Args:
+            location_key: Location identifier (e.g., "NYC")
+            models: List of models to fetch. Options: "gfs_seamless", "ecmwf_ifs04"
+                   Defaults to both GFS and ECMWF.
+
+        Returns:
+            List of Forecast objects, one per model per day
+        """
+        location = get_location(location_key)
+        models = models or ["gfs_seamless", "ecmwf_ifs04"]
+
+        forecasts = []
+
+        for model in models:
+            params = {
+                "latitude": location["latitude"],
+                "longitude": location["longitude"],
+                "daily": "temperature_2m_max,temperature_2m_min",
+                "temperature_unit": "fahrenheit",
+                "timezone": location["timezone"],
+                "forecast_days": 7,
+                "models": model
+            }
+
+            response = self._request(self.OPEN_METEO_FORECAST_URL, params=params)
+
+            if not response:
+                logger.warning(f"No response from Open-Meteo for model {model}")
+                continue
+
+            # Parse the response
+            daily_data = response.get("daily", {})
+            dates = daily_data.get("time", [])
+            highs = daily_data.get("temperature_2m_max", [])
+            lows = daily_data.get("temperature_2m_min", [])
+
+            # Map model name to our internal names
+            model_name_map = {
+                "gfs_seamless": "gfs",
+                "ecmwf_ifs04": "ecmwf"
+            }
+            source = model_name_map.get(model, model)
+
+            forecast_time = datetime.utcnow()
+
+            for i, date_str in enumerate(dates):
+                try:
+                    target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    high = highs[i] if i < len(highs) else None
+                    low = lows[i] if i < len(lows) else None
+
+                    if high is not None or low is not None:
+                        forecasts.append(Forecast(
+                            source=source,
+                            location=location_key,
+                            forecast_time=forecast_time,
+                            target_date=target_date,
+                            high_temp_f=high,
+                            low_temp_f=low,
+                            raw_data={"model": model, "response": response}
+                        ))
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"Error parsing forecast data: {e}")
+                    continue
+
+        logger.info(f"Retrieved {len(forecasts)} forecasts from Open-Meteo for {location_key}")
+        return forecasts
+
+    def get_nws_forecast(self, location_key: str) -> List[Forecast]:
+        """
+        Fetch official NWS forecast.
+
+        Args:
+            location_key: Location identifier (e.g., "NYC")
+
+        Returns:
+            List of Forecast objects
+        """
+        location = get_location(location_key)
+        gridpoint = location["nws_gridpoint"]
+
+        url = f"{self.NWS_BASE_URL}/gridpoints/{gridpoint}/forecast"
+        response = self._request(url, api="nws")
+
+        if not response:
+            logger.warning(f"No response from NWS for {location_key}")
+            return []
+
+        forecasts = []
+        forecast_time = datetime.utcnow()
+
+        # NWS returns periods (day/night alternating)
+        periods = response.get("properties", {}).get("periods", [])
+
+        # Group periods by date to get high/low
+        date_temps = {}
+
+        for period in periods:
+            try:
+                # Parse the start time to get the date
+                start_time = period.get("startTime", "")
+                period_date = datetime.fromisoformat(start_time.replace("Z", "+00:00")).date()
+
+                is_daytime = period.get("isDaytime", True)
+                temp = period.get("temperature")
+                temp_unit = period.get("temperatureUnit", "F")
+
+                # Convert to Fahrenheit if needed
+                if temp_unit == "C":
+                    temp = temp * 9 / 5 + 32
+
+                if period_date not in date_temps:
+                    date_temps[period_date] = {"high": None, "low": None}
+
+                if is_daytime:
+                    date_temps[period_date]["high"] = temp
+                else:
+                    date_temps[period_date]["low"] = temp
+
+            except (ValueError, KeyError, TypeError) as e:
+                logger.debug(f"Error parsing NWS period: {e}")
+                continue
+
+        # Create Forecast objects
+        for target_date, temps in date_temps.items():
+            if temps["high"] is not None or temps["low"] is not None:
+                forecasts.append(Forecast(
+                    source="nws",
+                    location=location_key,
+                    forecast_time=forecast_time,
+                    target_date=target_date,
+                    high_temp_f=temps["high"],
+                    low_temp_f=temps["low"],
+                    raw_data={"response": response}
+                ))
+
+        logger.info(f"Retrieved {len(forecasts)} forecasts from NWS for {location_key}")
+        return forecasts
+
+    def get_all_forecasts(self, location_key: str) -> Dict[str, List[Forecast]]:
+        """
+        Fetch forecasts from all sources for a location.
+
+        Args:
+            location_key: Location identifier (e.g., "NYC")
+
+        Returns:
+            Dictionary mapping source names to lists of Forecasts
+        """
+        all_forecasts = {
+            "gfs": [],
+            "ecmwf": [],
+            "nws": []
+        }
+
+        # Get Open-Meteo forecasts (GFS and ECMWF)
+        open_meteo_forecasts = self.get_open_meteo_forecast(location_key)
+        for forecast in open_meteo_forecasts:
+            if forecast.source in all_forecasts:
+                all_forecasts[forecast.source].append(forecast)
+
+        # Get NWS forecast
+        nws_forecasts = self.get_nws_forecast(location_key)
+        all_forecasts["nws"] = nws_forecasts
+
+        return all_forecasts
+
+    def get_forecasts_for_date(self, location_key: str,
+                                target_date: date) -> Dict[str, Forecast]:
+        """
+        Get forecasts from all sources for a specific date.
+
+        Args:
+            location_key: Location identifier
+            target_date: Date to get forecasts for
+
+        Returns:
+            Dictionary mapping source names to Forecast objects
+        """
+        all_forecasts = self.get_all_forecasts(location_key)
+
+        date_forecasts = {}
+        for source, forecasts in all_forecasts.items():
+            for forecast in forecasts:
+                if forecast.target_date == target_date:
+                    date_forecasts[source] = forecast
+                    break
+
+        return date_forecasts
+
+    def get_historical_actuals(self, location_key: str, start_date: date,
+                                end_date: date) -> List[ActualWeather]:
+        """
+        Fetch historical actual temperatures from Open-Meteo Archive.
+
+        Args:
+            location_key: Location identifier
+            start_date: Start date for historical data
+            end_date: End date for historical data
+
+        Returns:
+            List of ActualWeather objects
+        """
+        location = get_location(location_key)
+
+        params = {
+            "latitude": location["latitude"],
+            "longitude": location["longitude"],
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "daily": "temperature_2m_max,temperature_2m_min",
+            "temperature_unit": "fahrenheit",
+            "timezone": location["timezone"]
+        }
+
+        response = self._request(self.OPEN_METEO_HISTORICAL_URL, params=params)
+
+        if not response:
+            logger.warning(f"No historical data from Open-Meteo for {location_key}")
+            return []
+
+        actuals = []
+        daily_data = response.get("daily", {})
+        dates = daily_data.get("time", [])
+        highs = daily_data.get("temperature_2m_max", [])
+        lows = daily_data.get("temperature_2m_min", [])
+
+        for i, date_str in enumerate(dates):
+            try:
+                actual_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                high = highs[i] if i < len(highs) else None
+                low = lows[i] if i < len(lows) else None
+
+                if high is not None and low is not None:
+                    actuals.append(ActualWeather(
+                        location=location_key,
+                        date=actual_date,
+                        high_temp_f=high,
+                        low_temp_f=low,
+                        source="open_meteo_archive"
+                    ))
+            except (ValueError, IndexError) as e:
+                logger.debug(f"Error parsing historical data: {e}")
+                continue
+
+        logger.info(f"Retrieved {len(actuals)} historical records for {location_key}")
+        return actuals
+
+    def get_actual_for_date(self, location_key: str,
+                            target_date: date) -> Optional[ActualWeather]:
+        """
+        Get actual weather for a specific date (for settlement).
+
+        Args:
+            location_key: Location identifier
+            target_date: Date to get actual weather for
+
+        Returns:
+            ActualWeather object or None if not available
+        """
+        # For recent dates, fetch from archive
+        actuals = self.get_historical_actuals(location_key, target_date, target_date)
+
+        if actuals:
+            return actuals[0]
+
+        return None
+
+    def test_connection(self) -> Dict[str, bool]:
+        """
+        Test connectivity to all weather APIs.
+
+        Returns:
+            Dictionary mapping API names to connection status
+        """
+        results = {}
+
+        # Test Open-Meteo
+        try:
+            response = self._request(
+                self.OPEN_METEO_FORECAST_URL,
+                params={"latitude": 40.7128, "longitude": -74.0060, "daily": "temperature_2m_max"},
+                api="open_meteo"
+            )
+            results["open_meteo"] = response is not None
+            logger.info(f"Open-Meteo connection: {'success' if results['open_meteo'] else 'failed'}")
+        except Exception as e:
+            results["open_meteo"] = False
+            logger.error(f"Open-Meteo connection failed: {e}")
+
+        # Test NWS
+        try:
+            response = self._request(
+                f"{self.NWS_BASE_URL}/gridpoints/OKX/33,37/forecast",
+                api="nws"
+            )
+            results["nws"] = response is not None
+            logger.info(f"NWS connection: {'success' if results['nws'] else 'failed'}")
+        except Exception as e:
+            results["nws"] = False
+            logger.error(f"NWS connection failed: {e}")
+
+        return results
+
+
+# Example usage and testing
+if __name__ == "__main__":
+    from utils.logger import setup_logger
+    setup_logger()
+
+    client = WeatherClient()
+
+    # Test connections
+    print("Testing API connections...")
+    status = client.test_connection()
+    print(f"Open-Meteo: {'✓' if status.get('open_meteo') else '✗'}")
+    print(f"NWS: {'✓' if status.get('nws') else '✗'}")
+
+    # Get forecasts for NYC
+    print("\nFetching NYC forecasts...")
+    forecasts = client.get_all_forecasts("NYC")
+
+    for source, source_forecasts in forecasts.items():
+        print(f"\n{source.upper()} Forecasts:")
+        for forecast in source_forecasts[:3]:  # Show first 3
+            print(f"  {forecast.target_date}: High {forecast.high_temp_f}°F, Low {forecast.low_temp_f}°F")
+
+    # Get historical data
+    print("\nFetching historical data...")
+    from datetime import timedelta
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=7)
+    actuals = client.get_historical_actuals("NYC", start, end)
+
+    print(f"Historical records: {len(actuals)}")
+    for actual in actuals[:3]:
+        print(f"  {actual.date}: High {actual.high_temp_f}°F, Low {actual.low_temp_f}°F")

@@ -1,0 +1,95 @@
+"""
+Configuration settings for the Weather Kalshi Paper Trading System.
+"""
+
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Kalshi API Configuration
+KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
+KALSHI_API_SECRET = os.getenv("KALSHI_API_SECRET", "")
+KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+
+# Trading Parameters
+MIN_EDGE_THRESHOLD = 0.10      # Minimum 10% edge to consider trade
+MAX_POSITION_SIZE = 100        # Max $100 per paper trade
+MAX_CONTRACTS_PER_TRADE = 50   # Maximum contracts per single trade
+
+CONFIDENCE_LEVELS = {
+    "high": 0.15,              # 15%+ edge = high confidence
+    "medium": 0.10,            # 10-15% edge = medium confidence
+    "low": 0.05                # 5-10% edge = low confidence (no trade)
+}
+
+# Model Weights for Ensemble
+MODEL_WEIGHTS = {
+    "ecmwf": 0.40,      # European model - most accurate
+    "gfs": 0.35,        # American model - good for short term
+    "nws": 0.25         # Official forecast - what most people see
+}
+
+# Temperature Probability Distribution
+# Standard deviation for temperature forecasts (in °F)
+# Increases with forecast horizon
+TEMP_UNCERTAINTY = {
+    1: 2.0,   # 1 day out: ±2°F std dev
+    2: 3.0,   # 2 days out: ±3°F std dev
+    3: 4.0,   # 3 days out: ±4°F std dev
+    4: 5.0,   # 4 days out: ±5°F std dev
+    5: 6.0,   # 5 days out: ±6°F std dev
+    6: 7.0,   # 6 days out: ±7°F std dev
+    7: 8.0    # 7 days out: ±8°F std dev
+}
+
+# Data Collection Schedule
+COLLECTION_INTERVAL_MINUTES = 60  # Collect data every hour
+TRADING_CHECK_INTERVAL_MINUTES = 15  # Check for trades every 15 min
+
+# Database Configuration
+DATABASE_PATH = os.getenv("DATABASE_PATH", "./data/storage/")
+FORECASTS_DB = os.path.join(DATABASE_PATH, "forecasts.db")
+TRADES_DB = os.path.join(DATABASE_PATH, "trades.db")
+
+# Logging Configuration
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_DIR = "./logs/"
+
+
+def calculate_kalshi_fee(price: float, contracts: int) -> float:
+    """
+    Calculate Kalshi trading fee.
+
+    Fee = 0.07 * contracts * price * (1 - price)
+    Max fee = $0.0175 per contract (at 50¢)
+
+    Args:
+        price: Contract price (0-1)
+        contracts: Number of contracts
+
+    Returns:
+        Total fee in dollars
+    """
+    fee_per_contract = 0.07 * price * (1 - price)
+    fee_per_contract = min(fee_per_contract, 0.0175)
+    return fee_per_contract * contracts
+
+
+def get_confidence_level(edge: float) -> str:
+    """
+    Determine confidence level based on edge.
+
+    Args:
+        edge: Calculated edge (our probability - market probability)
+
+    Returns:
+        Confidence level string: "high", "medium", or "low"
+    """
+    if edge >= CONFIDENCE_LEVELS["high"]:
+        return "high"
+    elif edge >= CONFIDENCE_LEVELS["medium"]:
+        return "medium"
+    else:
+        return "low"
