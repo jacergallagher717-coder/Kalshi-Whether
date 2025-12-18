@@ -16,6 +16,9 @@ schedule>=1.2.0
 # Environment variables
 python-dotenv>=1.0.0
 
+# Cryptography for API key signing
+pycryptodome>=3.19.0
+
 # Timezone handling
 pytz>=2023.3
 

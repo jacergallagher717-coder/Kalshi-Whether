@@ -11,6 +11,8 @@ load_dotenv()
 # Kalshi API Configuration
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
 KALSHI_API_SECRET = os.getenv("KALSHI_API_SECRET", "")
+KALSHI_API_KEY_ID = os.getenv("KALSHI_API_KEY_ID", "")
+KALSHI_PRIVATE_KEY_PATH = os.getenv("KALSHI_PRIVATE_KEY_PATH", "./kalshi_private_key.pem")
 KALSHI_EMAIL = os.getenv("KALSHI_EMAIL", "")
 KALSHI_PASSWORD = os.getenv("KALSHI_PASSWORD", "")
 

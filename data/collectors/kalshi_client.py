@@ -13,14 +13,20 @@ Kalshi Weather Market Ticker Format:
 """
 
 import time
+import base64
 import requests
 from datetime import datetime, date
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from Crypto.PublicKey import RSA
+from Crypto.Signature import pkcs1_15
+from Crypto.Hash import SHA256
 
 from config.settings import (
     KALSHI_API_KEY, KALSHI_BASE_URL, KALSHI_EMAIL, KALSHI_PASSWORD,
-    KALSHI_USE_DEMO
+    KALSHI_USE_DEMO, KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH
 )
 from config.locations import LOCATIONS
 from utils.logger import get_logger
@@ -100,30 +106,73 @@ class KalshiClient:
     Client for interacting with the Kalshi API.
 
     Handles authentication, rate limiting, and data parsing.
+    Supports both API key signing (for demo) and email/password login.
     """
 
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key: str = None, private_key_path: str = None):
         """
         Initialize the Kalshi client.
 
         Args:
-            api_key: Kalshi API key. If not provided, uses KALSHI_API_KEY from settings.
+            api_key: Kalshi API key ID. If not provided, uses KALSHI_API_KEY_ID from settings.
+            private_key_path: Path to RSA private key file for signing.
         """
-        self.api_key = api_key or KALSHI_API_KEY
+        self.api_key_id = api_key or KALSHI_API_KEY_ID
+        self.private_key_path = private_key_path or KALSHI_PRIVATE_KEY_PATH
         self.base_url = KALSHI_BASE_URL
         self.session = requests.Session()
+        self.private_key = None
+        self.member_id = None
 
-        if self.api_key:
-            self.session.headers.update({
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            })
+        # Load private key if available (for API key auth)
+        self._load_private_key()
+
+        self.session.headers.update({
+            "Content-Type": "application/json"
+        })
 
         # Rate limiting
         self._last_request_time = 0
         self._min_request_interval = 0.05  # 20 requests/second max
 
         logger.info("Kalshi client initialized")
+
+    def _load_private_key(self):
+        """Load RSA private key from file for request signing."""
+        try:
+            key_path = Path(self.private_key_path)
+            if key_path.exists():
+                with open(key_path, "rb") as f:
+                    self.private_key = RSA.import_key(f.read())
+                logger.info("Private key loaded for API signing")
+            else:
+                logger.debug(f"Private key file not found: {key_path}")
+        except Exception as e:
+            logger.warning(f"Could not load private key: {e}")
+
+    def _sign_request(self, method: str, path: str, timestamp: str) -> str:
+        """
+        Sign a request using RSA private key.
+
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            path: API endpoint path
+            timestamp: Unix timestamp in milliseconds as string
+
+        Returns:
+            Base64-encoded signature
+        """
+        if not self.private_key:
+            raise ValueError("Private key not loaded - cannot sign request")
+
+        # Message format: timestamp + method + path
+        message = f"{timestamp}{method}{path}"
+        message_hash = SHA256.new(message.encode('utf-8'))
+
+        # Sign with RSA PKCS1v15 and SHA256
+        signature = pkcs1_15.new(self.private_key).sign(message_hash)
+
+        return base64.b64encode(signature).decode('utf-8')
 
     def _rate_limit(self):
         """Enforce rate limiting between requests."""
@@ -150,6 +199,19 @@ class KalshiClient:
         self._rate_limit()
         url = f"{self.base_url}{endpoint}"
 
+        # Build headers with API key signature if available
+        headers = {}
+        if self.private_key and self.api_key_id:
+            timestamp = str(int(time.time() * 1000))
+            # Full path for signing (includes /trade-api/v2 prefix)
+            full_path = f"/trade-api/v2{endpoint}"
+            signature = self._sign_request(method.upper(), full_path, timestamp)
+            headers = {
+                "KALSHI-ACCESS-KEY": self.api_key_id,
+                "KALSHI-ACCESS-SIGNATURE": signature,
+                "KALSHI-ACCESS-TIMESTAMP": timestamp
+            }
+
         for attempt in range(retries):
             try:
                 response = self.session.request(
@@ -157,6 +219,7 @@ class KalshiClient:
                     url=url,
                     params=params,
                     json=data,
+                    headers=headers,
                     timeout=30
                 )
 
@@ -465,21 +528,42 @@ class KalshiClient:
 
     def login(self, email: str = None, password: str = None) -> bool:
         """
-        Login to Kalshi and get authentication token.
-        Required for trading operations.
+        Login to Kalshi. Uses API key signing if available, otherwise email/password.
+
+        For API key auth (demo.kalshi.co), no explicit login is needed -
+        requests are signed with the private key.
+
+        For email/password auth, gets a session token.
 
         Args:
-            email: Kalshi account email
-            password: Kalshi account password
+            email: Kalshi account email (optional if using API key)
+            password: Kalshi account password (optional if using API key)
 
         Returns:
-            True if login successful
+            True if authentication is ready
         """
+        # If we have API key signing, verify it works
+        if self.private_key and self.api_key_id:
+            logger.info("Using API key authentication (RSA signing)")
+            # Test the API key by fetching balance
+            try:
+                balance = self.get_balance()
+                if balance is not None:
+                    logger.info(f"API key auth successful! Balance: ${balance.get('balance', 0):.2f}")
+                    return True
+                else:
+                    logger.error("API key auth failed - could not fetch balance")
+                    return False
+            except Exception as e:
+                logger.error(f"API key auth test failed: {e}")
+                return False
+
+        # Fall back to email/password login
         email = email or KALSHI_EMAIL
         password = password or KALSHI_PASSWORD
 
         if not email or not password:
-            logger.error("Email and password required for login")
+            logger.error("Email and password required for login (no API key configured)")
             return False
 
         try:

@@ -64,6 +64,8 @@ venv.bak/
 
 # Project specific
 data/storage/*.db
+kalshi_private_key.pem
+*.pem
 data/storage/reports/
 logs/
 *.log
