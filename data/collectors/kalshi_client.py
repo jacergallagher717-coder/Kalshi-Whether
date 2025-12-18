@@ -238,7 +238,7 @@ class KalshiClient:
         params = {
             "series_ticker": series_ticker,
             "limit": limit,
-            "status": "active"
+            "status": "open"
         }
         response = self._request("GET", "/markets", params=params)
 
