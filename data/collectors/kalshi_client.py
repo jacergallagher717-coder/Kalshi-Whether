@@ -485,7 +485,7 @@ class KalshiClient:
         try:
             response = self._request(
                 "POST",
-                "/login",
+                "/log_in",
                 data={"email": email, "password": password}
             )
 
