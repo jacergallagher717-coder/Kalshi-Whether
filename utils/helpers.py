@@ -12,10 +12,13 @@ def parse_kalshi_ticker(ticker: str) -> dict:
     """
     Parse a Kalshi weather market ticker to extract components.
 
-    Ticker format: HIGHNY-25JAN15-T35
-    - HIGHNY = NYC high temp market
-    - 25JAN15 = January 15, 2025
-    - T35 = Temperature threshold 35°F
+    New Ticker formats:
+    - KXHIGHNY-25DEC18-T57 = NYC high temp > 57°F on Dec 18, 2025
+    - KXHIGHNY-25DEC18-B50.5 = NYC high temp 50-51°F bracket on Dec 18, 2025
+    - KXLOWNY-25DEC18-T30 = NYC low temp < 30°F on Dec 18, 2025
+
+    Legacy format (also supported):
+    - HIGHNY-25JAN15-T35
 
     Args:
         ticker: Kalshi market ticker string
@@ -26,20 +29,24 @@ def parse_kalshi_ticker(ticker: str) -> dict:
         - market_type: "high" or "low"
         - target_date: date object
         - temp_threshold: float temperature in °F
+        - is_bracket: bool - True if this is a bracket/range market
     """
-    # Pattern: PREFIX-YYMMMDD-TTEMP
-    pattern = r'^(HIGH|LOW)([A-Z]+)-(\d{2})([A-Z]{3})(\d{2})-T(-?\d+)$'
+    # New format: KXHIGHNY-25DEC18-T57 or KXHIGHNY-25DEC18-B50.5
+    # Also handles legacy: HIGHNY-25JAN15-T35
+    pattern = r'^(KX)?(HIGH|LOW)([A-Z]+)-(\d{2})([A-Z]{3})(\d{2})-([TB])(-?\d+\.?\d*)$'
     match = re.match(pattern, ticker)
 
     if not match:
         raise ValueError(f"Invalid ticker format: {ticker}")
 
-    market_type = match.group(1).lower()  # "high" or "low"
-    location_suffix = match.group(2)  # "NY", "CHI", etc.
-    year = int(match.group(3)) + 2000  # "25" -> 2025
-    month_str = match.group(4)  # "JAN"
-    day = int(match.group(5))  # "15"
-    temp = int(match.group(6))  # "35" or "-10"
+    has_kx = match.group(1) is not None  # Has KX prefix
+    market_type = match.group(2).lower()  # "high" or "low"
+    location_suffix = match.group(3)  # "NY", "CHI", "LAX", etc.
+    year = int(match.group(4)) + 2000  # "25" -> 2025
+    month_str = match.group(5)  # "DEC"
+    day = int(match.group(6))  # "18"
+    threshold_type = match.group(7)  # "T" for threshold, "B" for bracket
+    temp = float(match.group(8))  # "57" or "50.5"
 
     # Convert month string to number
     months = {
@@ -54,17 +61,27 @@ def parse_kalshi_ticker(ticker: str) -> dict:
     location_map = {
         'NY': 'NYC',
         'CHI': 'CHI',
+        'LAX': 'LA',
         'LA': 'LA',
-        'MIA': 'MIA'
+        'MIA': 'MIA',
+        'AUS': 'AUS',
+        'DEN': 'DEN',
+        'PHIL': 'PHI',
+        'PHI': 'PHI',
+        'HOU': 'HOU',
     }
     location = location_map.get(location_suffix, location_suffix)
+
+    # For brackets (B), the temp is the midpoint (e.g., 50.5 means 50-51 range)
+    is_bracket = (threshold_type == 'B')
 
     return {
         'ticker': ticker,
         'location': location,
         'market_type': market_type,
         'target_date': date(year, month, day),
-        'temp_threshold': float(temp)
+        'temp_threshold': temp,
+        'is_bracket': is_bracket
     }
 
 

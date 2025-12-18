@@ -43,6 +43,7 @@ class Market:
     open_interest: int
     status: str
     close_time: Optional[datetime] = None
+    is_bracket: bool = False  # True if this is a bracket/range market
 
 
 @dataclass
@@ -186,46 +187,64 @@ class KalshiClient:
             List of Market objects
         """
         markets = []
-        cursor = None
 
-        # Get location config for filtering
-        location_config = LOCATIONS.get(location) if location else None
+        # Map location to series tickers
+        series_map = {
+            "NYC": ["KXHIGHNY", "KXLOWNY"],
+            "CHI": ["KXHIGHCHI", "KXLOWCHI"],
+            "LA": ["KXHIGHLAX", "KXLOWLAX"],
+            "MIA": ["KXHIGHMIA", "KXLOWMIA"],
+            "AUS": ["KXHIGHAUS", "KXLOWAUS"],
+            "DEN": ["KXHIGHDEN", "KXLOWDEN"],
+            "PHI": ["KXHIGHPHIL", "KXLOWPHIL"],
+        }
 
-        while True:
-            raw_markets = self.get_markets(status="open", cursor=cursor)
+        # Determine which series to fetch
+        if location and location in series_map:
+            series_list = series_map[location]
+        else:
+            # Fetch all weather series
+            series_list = []
+            for s_list in series_map.values():
+                series_list.extend(s_list)
 
-            if not raw_markets:
-                break
+        # Fetch markets from each series
+        for series_ticker in series_list:
+            try:
+                raw_markets = self._get_markets_by_series(series_ticker)
 
-            for market_data in raw_markets:
-                ticker = market_data.get("ticker", "")
+                for market_data in raw_markets:
+                    ticker = market_data.get("ticker", "")
 
-                # Filter for weather markets (HIGH or LOW prefix)
-                if not (ticker.startswith("HIGH") or ticker.startswith("LOW")):
-                    continue
-
-                # Filter by location if specified
-                if location_config:
-                    if not (ticker.startswith(location_config["kalshi_high_prefix"]) or
-                            ticker.startswith(location_config["kalshi_low_prefix"])):
+                    try:
+                        parsed = parse_kalshi_ticker(ticker)
+                        market = self._parse_market(market_data, parsed)
+                        if market:
+                            markets.append(market)
+                    except (ValueError, KeyError) as e:
+                        logger.debug(f"Skipping market {ticker}: {e}")
                         continue
 
-                try:
-                    parsed = parse_kalshi_ticker(ticker)
-                    market = self._parse_market(market_data, parsed)
-                    if market:
-                        markets.append(market)
-                except (ValueError, KeyError) as e:
-                    logger.debug(f"Skipping market {ticker}: {e}")
-                    continue
-
-            # Check for more pages
-            # Note: Actual pagination handling depends on Kalshi API response format
-            break  # For now, single page
+            except Exception as e:
+                logger.warning(f"Error fetching series {series_ticker}: {e}")
+                continue
 
         logger.info(f"Found {len(markets)} weather markets" +
                     (f" for {location}" if location else ""))
         return markets
+
+    def _get_markets_by_series(self, series_ticker: str, limit: int = 50) -> List[dict]:
+        """Fetch markets for a specific series."""
+        params = {
+            "series_ticker": series_ticker,
+            "limit": limit,
+            "status": "active"
+        }
+        response = self._request("GET", "/markets", params=params)
+
+        if response and "markets" in response:
+            return response["markets"]
+        return []
 
     def _parse_market(self, market_data: dict, parsed_ticker: dict) -> Optional[Market]:
         """
@@ -269,7 +288,8 @@ class KalshiClient:
                 volume=market_data.get("volume", 0) or 0,
                 open_interest=market_data.get("open_interest", 0) or 0,
                 status=market_data.get("status", "unknown"),
-                close_time=self._parse_datetime(market_data.get("close_time"))
+                close_time=self._parse_datetime(market_data.get("close_time")),
+                is_bracket=parsed_ticker.get("is_bracket", False)
             )
         except Exception as e:
             logger.error(f"Error parsing market data: {e}")
