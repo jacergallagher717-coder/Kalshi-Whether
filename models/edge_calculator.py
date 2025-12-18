@@ -171,6 +171,10 @@ class EdgeCalculator:
         Returns:
             Kelly fraction (0-1), capped at 0.25 for safety
         """
+        # Guard against division by zero at price extremes
+        if entry_price <= 0.01 or entry_price >= 0.99:
+            return 0.0
+
         if direction == "BUY_YES":
             p = our_probability
             b = (1.0 - entry_price) / entry_price  # Odds
@@ -295,6 +299,11 @@ class EdgeCalculator:
             logger.debug(f"Skipping {ticker}: too far out ({days_out} days)")
             return None
 
+        # Skip markets at extreme prices (can't calculate Kelly, minimal liquidity)
+        if market_price <= 0.01 or market_price >= 0.99:
+            logger.debug(f"Skipping {ticker}: price at extreme ({market_price:.2f})")
+            return None
+
         # Determine direction for probability calculation
         # For HIGH markets: we want P(temp > threshold)
         # For LOW markets: we want P(temp < threshold)
@@ -314,10 +323,15 @@ class EdgeCalculator:
         prob_confidence = prob_result["confidence"]
 
         # Calculate edge
-        edge = self.calculate_edge(market_price, our_probability)
+        raw_edge = self.calculate_edge(market_price, our_probability)
 
         # Determine trade direction
         trade_direction = self.determine_direction(our_probability, market_price)
+
+        # Calculate directional edge (always positive from trade perspective)
+        # For BUY_YES: edge = our_prob - market_prob (positive means we like YES)
+        # For BUY_NO: edge = market_prob - our_prob (positive means we like NO)
+        edge = abs(raw_edge)
 
         # Calculate EV
         expected_value = self.calculate_expected_value(
@@ -325,7 +339,7 @@ class EdgeCalculator:
         )
 
         # Skip if edge below threshold
-        if abs(edge) < MIN_EDGE_THRESHOLD:
+        if edge < MIN_EDGE_THRESHOLD:
             logger.debug(f"Skipping {ticker}: edge {edge:.2%} below threshold")
             return None
 
@@ -420,7 +434,7 @@ class EdgeCalculator:
             f"{market_type} temp {direction_word} {threshold:.0f}°F on {target_date}. "
             f"Ensemble forecast: {ensemble_temp:.1f}°F. "
             f"Market at {market_price:.0%} implies {market_implied:.1f}°F. "
-            f"Edge: {edge:+.1%}."
+            f"Edge: +{abs(edge):.1%}."
         )
 
     def analyze_market(
