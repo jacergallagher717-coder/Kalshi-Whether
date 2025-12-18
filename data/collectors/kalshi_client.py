@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from Crypto.PublicKey import RSA
-from Crypto.Signature import pkcs1_15
+from Crypto.Signature import pkcs1_15, pss
 from Crypto.Hash import SHA256
 
 from config.settings import (
@@ -150,14 +150,14 @@ class KalshiClient:
         except Exception as e:
             logger.warning(f"Could not load private key: {e}")
 
-    def _sign_request(self, method: str, path: str, timestamp: str) -> str:
+    def _sign_request(self, timestamp: str, method: str, path: str) -> str:
         """
-        Sign a request using RSA private key.
+        Sign a request using RSA private key per Kalshi API spec.
 
         Args:
+            timestamp: Unix timestamp in milliseconds as string
             method: HTTP method (GET, POST, etc.)
             path: API endpoint path
-            timestamp: Unix timestamp in milliseconds as string
 
         Returns:
             Base64-encoded signature
@@ -165,12 +165,12 @@ class KalshiClient:
         if not self.private_key:
             raise ValueError("Private key not loaded - cannot sign request")
 
-        # Message format: timestamp + method + path
+        # Kalshi signature format: timestamp + method + path
         message = f"{timestamp}{method}{path}"
         message_hash = SHA256.new(message.encode('utf-8'))
 
-        # Sign with RSA PKCS1v15 and SHA256
-        signature = pkcs1_15.new(self.private_key).sign(message_hash)
+        # Sign with RSA-PSS and SHA256 (Kalshi's required format)
+        signature = pss.new(self.private_key).sign(message_hash)
 
         return base64.b64encode(signature).decode('utf-8')
 
@@ -205,12 +205,13 @@ class KalshiClient:
             timestamp = str(int(time.time() * 1000))
             # Full path for signing (includes /trade-api/v2 prefix)
             full_path = f"/trade-api/v2{endpoint}"
-            signature = self._sign_request(method.upper(), full_path, timestamp)
+            signature = self._sign_request(timestamp, method.upper(), full_path)
             headers = {
                 "KALSHI-ACCESS-KEY": self.api_key_id,
                 "KALSHI-ACCESS-SIGNATURE": signature,
                 "KALSHI-ACCESS-TIMESTAMP": timestamp
             }
+            logger.debug(f"Signing: ts={timestamp} method={method.upper()} path={full_path}")
 
         for attempt in range(retries):
             try:
