@@ -27,13 +27,15 @@ import schedule
 from config.settings import (
     COLLECTION_INTERVAL_MINUTES,
     TRADING_CHECK_INTERVAL_MINUTES,
-    KALSHI_API_KEY
+    KALSHI_API_KEY, KALSHI_USE_DEMO,
+    AUTO_TRADE_ENABLED
 )
 from config.locations import ACTIVE_LOCATIONS
 from data.collectors import DataManager
 from trading.signal_generator import SignalGenerator
 from trading.paper_trader import PaperTrader
 from trading.position_manager import PositionManager
+from trading.auto_trader import AutoTrader
 from analysis.performance import PerformanceAnalyzer
 from analysis.edge_validation import EdgeValidator
 from analysis.reports import ReportGenerator
@@ -349,6 +351,149 @@ def cmd_analyze_market(args):
         print("No tradeable signal (edge below threshold)")
 
 
+def cmd_auto(args):
+    """Run automated trading bot."""
+    from data.collectors.kalshi_client import KalshiClient
+
+    print("\n" + "="*60)
+    print("WEATHER TRADING BOT - AUTO MODE")
+    print("="*60)
+
+    # Check settings
+    if args.live:
+        if not AUTO_TRADE_ENABLED:
+            print("\nWARNING: AUTO_TRADE_ENABLED is not set in .env")
+            print("Set AUTO_TRADE_ENABLED=true to enable live trading")
+            print("\nFalling back to paper-only mode...")
+            args.live = False
+        elif not KALSHI_USE_DEMO:
+            print("\n" + "!"*60)
+            print("WARNING: You are about to trade with REAL MONEY!")
+            print("KALSHI_USE_DEMO=false means PRODUCTION mode")
+            print("!"*60)
+            confirm = input("\nType 'CONFIRM' to proceed: ")
+            if confirm != "CONFIRM":
+                print("Aborted.")
+                return
+
+    # Create auto trader
+    auto_trader = AutoTrader(live_trading=args.live)
+
+    # Show configuration
+    print(f"\nConfiguration:")
+    print(f"  Live Trading: {'YES' if args.live else 'NO (Paper Only)'}")
+    print(f"  Demo Mode: {'YES' if KALSHI_USE_DEMO else 'NO (PRODUCTION)'}")
+    print(f"  Scan Interval: {args.interval} minutes")
+
+    if args.once:
+        # Single scan and execute
+        print("\nRunning single scan...")
+        signals = auto_trader.scan_and_execute(auto_execute=not args.dry_run)
+
+        if signals:
+            print(f"\nFound {len(signals)} signals:")
+            for sig in signals:
+                executed = "EXECUTED" if not args.dry_run else "DRY RUN"
+                print(f"  [{executed}] {sig.ticker}: {sig.direction} @ ${sig.market_price:.2f}, Edge: {sig.edge:.1%}")
+        else:
+            print("\nNo signals found")
+    else:
+        # Run continuous loop
+        auto_trader.run_continuous(interval_minutes=args.interval)
+
+
+def cmd_login(args):
+    """Test Kalshi login and show account info."""
+    from data.collectors.kalshi_client import KalshiClient
+
+    print("Testing Kalshi login...")
+    print(f"Mode: {'DEMO' if KALSHI_USE_DEMO else 'PRODUCTION'}")
+    print()
+
+    client = KalshiClient()
+
+    if client.login():
+        print("Login successful!")
+        print()
+
+        # Get balance
+        balance = client.get_balance()
+        if balance:
+            print(f"Account Balance: ${balance['balance']:.2f}")
+            print(f"Available: ${balance['available_balance']:.2f}")
+
+        # Get positions
+        positions = client.get_positions()
+        if positions:
+            print(f"\nOpen Positions: {len(positions)}")
+            for pos in positions[:5]:  # Show first 5
+                direction = "LONG YES" if pos.market_exposure > 0 else "LONG NO"
+                print(f"  {pos.ticker}: {direction} x{abs(pos.market_exposure)}")
+        else:
+            print("\nNo open positions")
+    else:
+        print("Login failed!")
+        print("Check your KALSHI_EMAIL and KALSHI_PASSWORD in .env")
+
+
+def cmd_execute(args):
+    """Execute a specific trade signal."""
+    from data.collectors.kalshi_client import KalshiClient
+
+    system = TradingSystem()
+    client = KalshiClient()
+
+    # First, analyze the market
+    print(f"Analyzing {args.ticker}...")
+    system.collect_data()
+
+    signal = system.signal_generator.generate_single_signal(args.ticker, force=True)
+
+    if not signal:
+        print("Could not generate signal for this market")
+        return
+
+    print(f"\nSignal for {signal.ticker}:")
+    print(f"  Direction: {signal.direction}")
+    print(f"  Price: ${signal.market_price:.2f}")
+    print(f"  Edge: {signal.edge:.1%}")
+    print(f"  Recommended: {signal.recommended_contracts} contracts")
+
+    # Override contracts if specified
+    contracts = args.contracts or signal.recommended_contracts
+
+    if args.live:
+        print(f"\n{'!'*40}")
+        print(f"LIVE TRADE: {signal.direction} {contracts} contracts @ ${signal.market_price:.2f}")
+        print(f"{'!'*40}")
+
+        if not KALSHI_USE_DEMO:
+            print("\nWARNING: This is REAL MONEY (production mode)")
+
+        confirm = input("\nType 'YES' to execute: ")
+        if confirm != "YES":
+            print("Aborted.")
+            return
+
+        if not client.login():
+            print("Login failed!")
+            return
+
+        order = client.execute_signal(signal)
+        if order:
+            print(f"\nOrder placed: {order.order_id}")
+            print(f"Status: {order.status}")
+        else:
+            print("Order failed!")
+    else:
+        # Paper trade only
+        trade = system.paper_trader.execute_paper_trade(signal)
+        if trade:
+            print(f"\nPaper trade executed: {trade.id}")
+        else:
+            print("Paper trade failed (may already have position)")
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -358,7 +503,11 @@ def main():
 Examples:
     python main.py run              # Start the automated system
     python main.py scan             # One-time market scan
-    python main.py scan --execute   # Scan and execute trades
+    python main.py scan --execute   # Scan and execute paper trades
+    python main.py auto             # Run continuous auto-trading (paper)
+    python main.py auto --live      # Run continuous auto-trading (Kalshi)
+    python main.py login            # Test Kalshi login
+    python main.py execute TICKER   # Execute trade on specific market
     python main.py status           # View positions and performance
     python main.py settle           # Settle matured positions
     python main.py report           # Daily report
@@ -379,6 +528,25 @@ Examples:
     scan_parser = subparsers.add_parser("scan", help="One-time market scan")
     scan_parser.add_argument("--execute", action="store_true", help="Execute paper trades")
     scan_parser.set_defaults(func=cmd_scan)
+
+    # Auto command (NEW)
+    auto_parser = subparsers.add_parser("auto", help="Run automated trading bot")
+    auto_parser.add_argument("--live", action="store_true", help="Execute on Kalshi (not just paper)")
+    auto_parser.add_argument("--once", action="store_true", help="Single scan then exit")
+    auto_parser.add_argument("--dry-run", action="store_true", help="Scan but don't execute")
+    auto_parser.add_argument("--interval", type=int, default=15, help="Minutes between scans")
+    auto_parser.set_defaults(func=cmd_auto)
+
+    # Login command (NEW)
+    login_parser = subparsers.add_parser("login", help="Test Kalshi login and show account")
+    login_parser.set_defaults(func=cmd_login)
+
+    # Execute command (NEW)
+    execute_parser = subparsers.add_parser("execute", help="Execute trade on specific market")
+    execute_parser.add_argument("ticker", help="Market ticker")
+    execute_parser.add_argument("--live", action="store_true", help="Execute on Kalshi")
+    execute_parser.add_argument("--contracts", type=int, help="Override contract count")
+    execute_parser.set_defaults(func=cmd_execute)
 
     # Status command
     status_parser = subparsers.add_parser("status", help="Show current status")
@@ -403,7 +571,7 @@ Examples:
 
     # Analyze command
     analyze_parser = subparsers.add_parser("analyze", help="Analyze specific market")
-    analyze_parser.add_argument("ticker", help="Market ticker (e.g., HIGHNY-25JAN15-T35)")
+    analyze_parser.add_argument("ticker", help="Market ticker (e.g., KXHIGHNY-25DEC18-T50)")
     analyze_parser.set_defaults(func=cmd_analyze_market)
 
     args = parser.parse_args()

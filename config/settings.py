@@ -11,7 +11,19 @@ load_dotenv()
 # Kalshi API Configuration
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
 KALSHI_API_SECRET = os.getenv("KALSHI_API_SECRET", "")
-KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+KALSHI_EMAIL = os.getenv("KALSHI_EMAIL", "")
+KALSHI_PASSWORD = os.getenv("KALSHI_PASSWORD", "")
+
+# Use demo API by default for safety (set KALSHI_USE_DEMO=false for production)
+KALSHI_USE_DEMO = os.getenv("KALSHI_USE_DEMO", "true").lower() == "true"
+KALSHI_DEMO_URL = "https://demo-api.kalshi.co/trade-api/v2"
+KALSHI_PROD_URL = "https://api.elections.kalshi.com/trade-api/v2"
+KALSHI_BASE_URL = KALSHI_DEMO_URL if KALSHI_USE_DEMO else KALSHI_PROD_URL
+
+# Auto-trading Configuration
+AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
+AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "10"))
+AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "5"))
 
 # Trading Parameters
 MIN_EDGE_THRESHOLD = 0.10      # Minimum 10% edge to consider trade

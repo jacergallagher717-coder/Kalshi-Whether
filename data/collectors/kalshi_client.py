@@ -18,7 +18,10 @@ from datetime import datetime, date
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, field
 
-from config.settings import KALSHI_API_KEY, KALSHI_BASE_URL
+from config.settings import (
+    KALSHI_API_KEY, KALSHI_BASE_URL, KALSHI_EMAIL, KALSHI_PASSWORD,
+    KALSHI_USE_DEMO
+)
 from config.locations import LOCATIONS
 from utils.logger import get_logger
 from utils.helpers import parse_kalshi_ticker
@@ -64,6 +67,32 @@ class PricePoint:
     timestamp: datetime
     yes_price: float
     volume: int
+
+
+@dataclass
+class Order:
+    """Represents a Kalshi order."""
+    order_id: str
+    ticker: str
+    side: str  # "yes" or "no"
+    action: str  # "buy" or "sell"
+    type: str  # "limit" or "market"
+    status: str  # "pending", "open", "filled", "cancelled"
+    count: int  # Number of contracts
+    price: float  # Limit price
+    filled_count: int = 0
+    remaining_count: int = 0
+    created_at: Optional[datetime] = None
+
+
+@dataclass
+class Position:
+    """Represents a position in a market."""
+    ticker: str
+    market_exposure: int  # Positive = long YES, negative = long NO
+    resting_orders_count: int
+    total_traded: int
+    realized_pnl: float
 
 
 class KalshiClient:
@@ -429,6 +458,257 @@ class KalshiClient:
             logger.error(f"Kalshi API connection failed: {e}")
 
         return False
+
+    # ===================
+    # Trading Methods
+    # ===================
+
+    def login(self, email: str = None, password: str = None) -> bool:
+        """
+        Login to Kalshi and get authentication token.
+        Required for trading operations.
+
+        Args:
+            email: Kalshi account email
+            password: Kalshi account password
+
+        Returns:
+            True if login successful
+        """
+        email = email or KALSHI_EMAIL
+        password = password or KALSHI_PASSWORD
+
+        if not email or not password:
+            logger.error("Email and password required for login")
+            return False
+
+        try:
+            response = self._request(
+                "POST",
+                "/login",
+                data={"email": email, "password": password}
+            )
+
+            if response and "token" in response:
+                self.session.headers.update({
+                    "Authorization": f"Bearer {response['token']}"
+                })
+                self.member_id = response.get("member_id")
+                logger.info(f"Logged in successfully (demo={KALSHI_USE_DEMO})")
+                return True
+            else:
+                logger.error("Login failed: no token in response")
+                return False
+
+        except Exception as e:
+            logger.error(f"Login failed: {e}")
+            return False
+
+    def get_balance(self) -> Optional[Dict]:
+        """
+        Get account balance.
+
+        Returns:
+            Balance info dict with 'balance', 'available_balance', etc.
+        """
+        response = self._request("GET", "/portfolio/balance")
+        if response:
+            balance = response.get("balance", 0)
+            # Convert cents to dollars if needed
+            if balance > 1000:
+                balance = balance / 100
+            return {
+                "balance": balance,
+                "available_balance": response.get("available_balance", 0) / 100
+                if response.get("available_balance", 0) > 100 else response.get("available_balance", 0)
+            }
+        return None
+
+    def get_positions(self) -> List[Position]:
+        """
+        Get all current positions.
+
+        Returns:
+            List of Position objects
+        """
+        response = self._request("GET", "/portfolio/positions")
+        if not response or "market_positions" not in response:
+            return []
+
+        positions = []
+        for pos in response["market_positions"]:
+            positions.append(Position(
+                ticker=pos.get("ticker", ""),
+                market_exposure=pos.get("market_exposure", 0),
+                resting_orders_count=pos.get("resting_orders_count", 0),
+                total_traded=pos.get("total_traded", 0),
+                realized_pnl=pos.get("realized_pnl", 0) / 100 if pos.get("realized_pnl", 0) > 100 else pos.get("realized_pnl", 0)
+            ))
+        return positions
+
+    def place_order(
+        self,
+        ticker: str,
+        side: str,
+        action: str,
+        count: int,
+        price: float = None,
+        order_type: str = "limit"
+    ) -> Optional[Order]:
+        """
+        Place an order on Kalshi.
+
+        Args:
+            ticker: Market ticker
+            side: "yes" or "no"
+            action: "buy" or "sell"
+            count: Number of contracts
+            price: Limit price (0-1), required for limit orders
+            order_type: "limit" or "market"
+
+        Returns:
+            Order object if successful
+        """
+        # Convert price to cents for API
+        price_cents = int(price * 100) if price else None
+
+        data = {
+            "ticker": ticker,
+            "side": side,
+            "action": action,
+            "count": count,
+            "type": order_type
+        }
+
+        if order_type == "limit" and price_cents:
+            data["yes_price"] = price_cents if side == "yes" else None
+            data["no_price"] = price_cents if side == "no" else None
+
+        response = self._request("POST", "/portfolio/orders", data=data)
+
+        if response and "order" in response:
+            order_data = response["order"]
+            return Order(
+                order_id=order_data.get("order_id", ""),
+                ticker=ticker,
+                side=side,
+                action=action,
+                type=order_type,
+                status=order_data.get("status", "pending"),
+                count=count,
+                price=price or 0,
+                filled_count=order_data.get("filled_count", 0),
+                remaining_count=order_data.get("remaining_count", count),
+                created_at=datetime.utcnow()
+            )
+
+        logger.error(f"Failed to place order: {response}")
+        return None
+
+    def buy_yes(self, ticker: str, count: int, limit_price: float) -> Optional[Order]:
+        """
+        Buy YES contracts at a limit price.
+
+        Args:
+            ticker: Market ticker
+            count: Number of contracts
+            limit_price: Maximum price to pay (0-1)
+
+        Returns:
+            Order object if successful
+        """
+        logger.info(f"Placing BUY YES order: {ticker} x{count} @ ${limit_price:.2f}")
+        return self.place_order(ticker, "yes", "buy", count, limit_price, "limit")
+
+    def buy_no(self, ticker: str, count: int, limit_price: float) -> Optional[Order]:
+        """
+        Buy NO contracts at a limit price.
+
+        Args:
+            ticker: Market ticker
+            count: Number of contracts
+            limit_price: Maximum price to pay (0-1)
+
+        Returns:
+            Order object if successful
+        """
+        logger.info(f"Placing BUY NO order: {ticker} x{count} @ ${limit_price:.2f}")
+        return self.place_order(ticker, "no", "buy", count, limit_price, "limit")
+
+    def sell_position(self, ticker: str, side: str, count: int, limit_price: float) -> Optional[Order]:
+        """
+        Sell existing position.
+
+        Args:
+            ticker: Market ticker
+            side: "yes" or "no" - which position to sell
+            count: Number of contracts to sell
+            limit_price: Minimum price to accept (0-1)
+
+        Returns:
+            Order object if successful
+        """
+        logger.info(f"Placing SELL {side.upper()} order: {ticker} x{count} @ ${limit_price:.2f}")
+        return self.place_order(ticker, side, "sell", count, limit_price, "limit")
+
+    def cancel_order(self, order_id: str) -> bool:
+        """
+        Cancel an open order.
+
+        Args:
+            order_id: Order ID to cancel
+
+        Returns:
+            True if cancelled successfully
+        """
+        response = self._request("DELETE", f"/portfolio/orders/{order_id}")
+        if response:
+            logger.info(f"Cancelled order {order_id}")
+            return True
+        return False
+
+    def get_fills(self, ticker: str = None, limit: int = 100) -> List[Dict]:
+        """
+        Get recent order fills.
+
+        Args:
+            ticker: Optional ticker to filter by
+            limit: Maximum fills to return
+
+        Returns:
+            List of fill records
+        """
+        params = {"limit": limit}
+        if ticker:
+            params["ticker"] = ticker
+
+        response = self._request("GET", "/portfolio/fills", params=params)
+        if response and "fills" in response:
+            return response["fills"]
+        return []
+
+    def execute_signal(self, signal) -> Optional[Order]:
+        """
+        Execute a trade signal on Kalshi.
+
+        Args:
+            signal: TradeSignal object from edge calculator
+
+        Returns:
+            Order object if successful
+        """
+        ticker = signal.ticker
+        contracts = signal.recommended_contracts
+
+        if signal.direction == "BUY_YES":
+            # Buy YES at the current ask (or slightly above for fills)
+            limit_price = min(signal.market_price + 0.02, 0.99)
+            return self.buy_yes(ticker, contracts, limit_price)
+        else:
+            # Buy NO - price is (1 - yes_price)
+            no_price = 1.0 - signal.market_price
+            limit_price = min(no_price + 0.02, 0.99)
+            return self.buy_no(ticker, contracts, limit_price)
 
 
 # Example usage and testing

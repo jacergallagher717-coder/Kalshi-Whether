@@ -1,0 +1,424 @@
+"""
+Automated trading system for weather markets.
+
+This module handles:
+1. Continuous market scanning at configured intervals
+2. Auto-execution of trades on Kalshi when signals are found
+3. Position monitoring with take profit and stop loss
+4. Daily trade limits and safety guards
+"""
+
+import time
+import signal
+import sys
+from datetime import datetime, date, timedelta
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+
+from config.settings import (
+    AUTO_TRADE_ENABLED, AUTO_TRADE_MAX_DAILY_TRADES,
+    AUTO_TRADE_MAX_OPEN_POSITIONS, KALSHI_USE_DEMO,
+    TRADING_CHECK_INTERVAL_MINUTES, MIN_EDGE_THRESHOLD
+)
+from data.collectors.kalshi_client import KalshiClient, Order, Position
+from trading.signal_generator import SignalGenerator
+from trading.paper_trader import PaperTrader
+from models.edge_calculator import TradeSignal
+from utils.logger import get_logger, setup_trade_logger
+
+logger = get_logger("auto_trader")
+trade_logger = setup_trade_logger()
+
+
+@dataclass
+class ExitStrategy:
+    """Configuration for position exit strategies."""
+    take_profit_pct: float = 0.30  # Exit if position value up 30%
+    stop_loss_pct: float = 0.50    # Exit if position value down 50%
+    early_exit_edge: float = 0.05  # Exit early if edge drops below 5%
+    max_hold_hours: int = 48       # Maximum hours to hold before settlement
+
+
+class AutoTrader:
+    """
+    Automated trading system that scans for opportunities and executes trades.
+
+    Features:
+    - Continuous market scanning at configured intervals
+    - Auto-execution on Kalshi demo or production
+    - Position monitoring with exit strategies
+    - Daily limits and safety controls
+    """
+
+    def __init__(
+        self,
+        kalshi_client: KalshiClient = None,
+        signal_generator: SignalGenerator = None,
+        paper_trader: PaperTrader = None,
+        exit_strategy: ExitStrategy = None,
+        live_trading: bool = False
+    ):
+        """
+        Initialize the auto trader.
+
+        Args:
+            kalshi_client: Kalshi API client
+            signal_generator: Signal generator for market scanning
+            paper_trader: Paper trader for local tracking
+            exit_strategy: Exit strategy configuration
+            live_trading: If True, execute on Kalshi; if False, paper trade only
+        """
+        self.kalshi = kalshi_client or KalshiClient()
+        self.signal_generator = signal_generator or SignalGenerator()
+        self.paper_trader = paper_trader or PaperTrader()
+        self.exit_strategy = exit_strategy or ExitStrategy()
+        self.live_trading = live_trading and AUTO_TRADE_ENABLED
+
+        # State tracking
+        self.running = False
+        self.trades_today = 0
+        self.last_scan_time = None
+        self.daily_reset_date = date.today()
+
+        # For graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+        logger.info(f"Auto trader initialized (live={self.live_trading}, demo={KALSHI_USE_DEMO})")
+
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals gracefully."""
+        logger.info("Shutdown signal received, stopping...")
+        self.running = False
+
+    def _reset_daily_counters(self):
+        """Reset daily counters if it's a new day."""
+        if date.today() != self.daily_reset_date:
+            self.trades_today = 0
+            self.daily_reset_date = date.today()
+            logger.info("Daily counters reset")
+
+    def _can_trade(self) -> tuple[bool, str]:
+        """
+        Check if we can execute a new trade.
+
+        Returns:
+            Tuple of (can_trade, reason)
+        """
+        self._reset_daily_counters()
+
+        # Check daily limit
+        if self.trades_today >= AUTO_TRADE_MAX_DAILY_TRADES:
+            return False, f"Daily limit reached ({AUTO_TRADE_MAX_DAILY_TRADES})"
+
+        # Check open positions limit
+        open_positions = self.paper_trader.get_open_positions()
+        if len(open_positions) >= AUTO_TRADE_MAX_OPEN_POSITIONS:
+            return False, f"Max open positions reached ({AUTO_TRADE_MAX_OPEN_POSITIONS})"
+
+        return True, "OK"
+
+    def scan_and_execute(self, auto_execute: bool = True) -> List[TradeSignal]:
+        """
+        Scan markets and optionally execute trades.
+
+        Args:
+            auto_execute: If True, automatically execute qualifying trades
+
+        Returns:
+            List of signals found
+        """
+        logger.info("Starting market scan...")
+        self.last_scan_time = datetime.now()
+
+        # Scan for signals
+        signals = self.signal_generator.scan_markets()
+
+        if not signals:
+            logger.info("No trade signals found")
+            return []
+
+        logger.info(f"Found {len(signals)} potential signals")
+
+        executed = []
+        for signal in signals:
+            can_trade, reason = self._can_trade()
+            if not can_trade:
+                logger.warning(f"Cannot trade: {reason}")
+                break
+
+            if auto_execute:
+                success = self._execute_trade(signal)
+                if success:
+                    executed.append(signal)
+                    self.trades_today += 1
+
+        if executed:
+            logger.info(f"Executed {len(executed)} trades")
+
+        return signals
+
+    def _execute_trade(self, signal: TradeSignal) -> bool:
+        """
+        Execute a single trade signal.
+
+        Args:
+            signal: Trade signal to execute
+
+        Returns:
+            True if trade executed successfully
+        """
+        ticker = signal.ticker
+
+        # Check if we already have a position in this market
+        existing = self.paper_trader.get_position(ticker)
+        if existing:
+            logger.info(f"Already have position in {ticker}, skipping")
+            return False
+
+        # Log the trade attempt
+        trade_logger.info(
+            f"SIGNAL | {ticker} | {signal.direction} | "
+            f"Price: ${signal.market_price:.2f} | Edge: {signal.edge:.1%} | "
+            f"Contracts: {signal.recommended_contracts}"
+        )
+
+        # Execute on Kalshi if live trading enabled
+        kalshi_order = None
+        if self.live_trading:
+            try:
+                kalshi_order = self.kalshi.execute_signal(signal)
+                if kalshi_order:
+                    trade_logger.info(
+                        f"KALSHI ORDER | {kalshi_order.order_id} | {ticker} | "
+                        f"Status: {kalshi_order.status}"
+                    )
+                else:
+                    logger.error(f"Failed to place Kalshi order for {ticker}")
+            except Exception as e:
+                logger.error(f"Error placing Kalshi order: {e}")
+
+        # Always record in paper trader for tracking
+        paper_trade = self.paper_trader.execute_paper_trade(signal)
+
+        if paper_trade:
+            logger.info(f"Trade executed: {paper_trade.id} - {ticker}")
+            return True
+
+        return False
+
+    def check_exits(self) -> List[str]:
+        """
+        Check all open positions for exit conditions.
+
+        Returns:
+            List of tickers that were exited
+        """
+        exited = []
+        positions = self.paper_trader.get_open_positions()
+
+        for position in positions:
+            should_exit, reason = self._should_exit(position)
+
+            if should_exit:
+                logger.info(f"Exit triggered for {position.ticker}: {reason}")
+
+                if self.live_trading:
+                    self._execute_exit(position)
+
+                exited.append(position.ticker)
+
+        return exited
+
+    def _should_exit(self, position) -> tuple[bool, str]:
+        """
+        Check if a position should be exited.
+
+        Args:
+            position: Paper trade position
+
+        Returns:
+            Tuple of (should_exit, reason)
+        """
+        # Get current market price
+        market = self.kalshi.get_market(position.ticker)
+        if not market:
+            return False, ""
+
+        current_price = market.yes_price if position.direction == "BUY_YES" else (1 - market.yes_price)
+        entry_price = position.entry_price
+
+        # Calculate P&L percentage
+        if entry_price > 0:
+            pnl_pct = (current_price - entry_price) / entry_price
+        else:
+            pnl_pct = 0
+
+        # Take profit
+        if pnl_pct >= self.exit_strategy.take_profit_pct:
+            return True, f"Take profit ({pnl_pct:.1%} gain)"
+
+        # Stop loss
+        if pnl_pct <= -self.exit_strategy.stop_loss_pct:
+            return True, f"Stop loss ({pnl_pct:.1%} loss)"
+
+        # Check if edge has deteriorated
+        # Re-analyze the market to get current edge
+        try:
+            new_signal = self.signal_generator.generate_single_signal(position.ticker)
+            if new_signal and abs(new_signal.edge) < self.exit_strategy.early_exit_edge:
+                return True, f"Edge deteriorated to {new_signal.edge:.1%}"
+        except Exception:
+            pass
+
+        # Check max hold time
+        hours_held = (datetime.utcnow() - position.created_at).total_seconds() / 3600
+        if hours_held >= self.exit_strategy.max_hold_hours:
+            return True, f"Max hold time reached ({hours_held:.0f}h)"
+
+        return False, ""
+
+    def _execute_exit(self, position):
+        """
+        Execute an early exit on Kalshi.
+
+        Args:
+            position: Position to exit
+        """
+        market = self.kalshi.get_market(position.ticker)
+        if not market:
+            logger.error(f"Cannot get market for exit: {position.ticker}")
+            return
+
+        # Determine exit parameters
+        if position.direction == "BUY_YES":
+            # Sell YES position
+            side = "yes"
+            # Sell at bid (or slightly below for fills)
+            exit_price = max(market.yes_bid - 0.01, 0.01)
+        else:
+            # Sell NO position
+            side = "no"
+            no_bid = 1 - market.yes_ask
+            exit_price = max(no_bid - 0.01, 0.01)
+
+        try:
+            order = self.kalshi.sell_position(
+                position.ticker,
+                side,
+                position.contracts,
+                exit_price
+            )
+
+            if order:
+                trade_logger.info(
+                    f"EXIT ORDER | {order.order_id} | {position.ticker} | "
+                    f"Sold {position.contracts} @ ${exit_price:.2f}"
+                )
+        except Exception as e:
+            logger.error(f"Error executing exit: {e}")
+
+    def run_continuous(self, interval_minutes: int = None):
+        """
+        Run continuous scanning and trading loop.
+
+        Args:
+            interval_minutes: Minutes between scans (default from settings)
+        """
+        interval = interval_minutes or TRADING_CHECK_INTERVAL_MINUTES
+
+        print(f"\n{'='*60}")
+        print("WEATHER TRADING BOT - CONTINUOUS MODE")
+        print(f"{'='*60}")
+        print(f"Live Trading: {'YES' if self.live_trading else 'NO (Paper Only)'}")
+        print(f"Demo Mode: {'YES' if KALSHI_USE_DEMO else 'NO (PRODUCTION!)'}")
+        print(f"Scan Interval: {interval} minutes")
+        print(f"Max Daily Trades: {AUTO_TRADE_MAX_DAILY_TRADES}")
+        print(f"Max Open Positions: {AUTO_TRADE_MAX_OPEN_POSITIONS}")
+        print(f"{'='*60}")
+        print("Press Ctrl+C to stop\n")
+
+        self.running = True
+
+        # Login to Kalshi if live trading
+        if self.live_trading:
+            if not self.kalshi.login():
+                logger.error("Failed to login to Kalshi, falling back to paper trading")
+                self.live_trading = False
+
+        scan_count = 0
+        while self.running:
+            try:
+                scan_count += 1
+                print(f"\n[Scan #{scan_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+                # Check for exits first
+                exits = self.check_exits()
+                if exits:
+                    print(f"  Exited positions: {', '.join(exits)}")
+
+                # Scan and execute
+                signals = self.scan_and_execute(auto_execute=True)
+
+                if signals:
+                    print(f"  Found {len(signals)} signals")
+                    for sig in signals[:3]:  # Show top 3
+                        print(f"    - {sig.ticker}: {sig.direction} @ ${sig.market_price:.2f}, Edge: {sig.edge:.1%}")
+                else:
+                    print("  No signals found")
+
+                # Show status
+                positions = self.paper_trader.get_open_positions()
+                print(f"  Open positions: {len(positions)}")
+                print(f"  Trades today: {self.trades_today}/{AUTO_TRADE_MAX_DAILY_TRADES}")
+
+                # Wait for next scan
+                print(f"\n  Next scan in {interval} minutes...")
+
+                for _ in range(interval * 60):
+                    if not self.running:
+                        break
+                    time.sleep(1)
+
+            except Exception as e:
+                logger.error(f"Error in trading loop: {e}")
+                time.sleep(60)  # Wait a minute before retrying
+
+        print("\nTrading bot stopped.")
+
+    def get_status(self) -> Dict:
+        """Get current auto trader status."""
+        positions = self.paper_trader.get_open_positions()
+        summary = self.paper_trader.get_performance_summary()
+
+        return {
+            "running": self.running,
+            "live_trading": self.live_trading,
+            "demo_mode": KALSHI_USE_DEMO,
+            "trades_today": self.trades_today,
+            "max_daily_trades": AUTO_TRADE_MAX_DAILY_TRADES,
+            "open_positions": len(positions),
+            "max_open_positions": AUTO_TRADE_MAX_OPEN_POSITIONS,
+            "last_scan": self.last_scan_time.isoformat() if self.last_scan_time else None,
+            "total_trades": summary["total_trades"],
+            "win_rate": summary["win_rate"],
+            "net_pnl": summary["net_pnl"]
+        }
+
+
+# Example usage
+if __name__ == "__main__":
+    from utils.logger import setup_logger
+    setup_logger()
+
+    print("Testing AutoTrader...")
+
+    trader = AutoTrader(live_trading=False)
+
+    # Single scan
+    signals = trader.scan_and_execute(auto_execute=False)
+    print(f"Found {len(signals)} signals")
+
+    # Show status
+    status = trader.get_status()
+    print(f"\nStatus: {status}")
