@@ -207,6 +207,61 @@ def cmd_scan(args):
     system.collect_data()
 
     print("\nScanning markets...")
+
+    # If verbose, show all markets with analysis
+    if getattr(args, 'verbose', False):
+        print("\n" + "="*70)
+        print("ALL MARKETS ANALYSIS")
+        print("="*70)
+
+        for location in ACTIVE_LOCATIONS:
+            markets = system.data_manager.get_markets(location)
+            if not markets:
+                continue
+
+            print(f"\n{location} Markets ({len(markets)} found):")
+            print("-"*50)
+
+            for market in markets:
+                try:
+                    analysis = system.signal_generator.get_market_analysis(market.ticker)
+
+                    if "error" in analysis:
+                        print(f"  {market.ticker}: Error - {analysis['error']}")
+                        continue
+
+                    signal = analysis.get("signal", {})
+                    edge = signal.get("edge", 0) if signal else 0
+                    our_prob = signal.get("our_probability", 0) if signal else 0
+
+                    # Show market details
+                    edge_str = f"{edge*100:+.1f}%" if edge else "N/A"
+                    prob_str = f"{our_prob*100:.0f}%" if our_prob else "N/A"
+
+                    threshold_symbol = ">" if market.market_type == "high" else "<"
+
+                    print(f"  {market.ticker}")
+                    print(f"    {market.market_type.upper()} temp {threshold_symbol} {market.temp_threshold}°F on {market.target_date}")
+                    print(f"    Market: YES @ ${market.yes_price:.2f} | Our Prob: {prob_str} | Edge: {edge_str}")
+
+                    # Show model forecasts
+                    if analysis.get("model_analysis"):
+                        temps = [f"{src}: {data['forecast_temp']:.0f}°F"
+                                for src, data in analysis["model_analysis"].items()]
+                        print(f"    Forecasts: {' | '.join(temps)}")
+
+                    if edge and abs(edge) >= 0.10:
+                        print(f"    *** SIGNAL: {signal.get('direction')} ***")
+                    print()
+
+                except Exception as e:
+                    print(f"  {market.ticker}: Error - {e}")
+
+        print("="*70)
+        print(f"Minimum edge for trade: 10%")
+        print("="*70)
+        return
+
     signals = system.signal_generator.scan_markets(ACTIVE_LOCATIONS)
 
     if not signals:
@@ -527,6 +582,7 @@ Examples:
     # Scan command
     scan_parser = subparsers.add_parser("scan", help="One-time market scan")
     scan_parser.add_argument("--execute", action="store_true", help="Execute paper trades")
+    scan_parser.add_argument("--verbose", "-v", action="store_true", help="Show all markets with analysis")
     scan_parser.set_defaults(func=cmd_scan)
 
     # Auto command (NEW)
