@@ -141,7 +141,8 @@ class KalshiClient:
             self._load_private_key()
 
         self.session.headers.update({
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept": "application/json"
         })
 
         # Rate limiting
