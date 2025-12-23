@@ -115,18 +115,30 @@ class KalshiClient:
 
         Args:
             api_key: Kalshi API key ID. If not provided, uses KALSHI_API_KEY_ID from settings.
+                     Pass empty string "" to explicitly disable auth.
             private_key_path: Path to RSA private key file for signing.
+                              Pass empty string "" to explicitly disable.
             base_url: Override base URL (for using production data with demo trading).
         """
-        self.api_key_id = api_key or KALSHI_API_KEY_ID
-        self.private_key_path = private_key_path or KALSHI_PRIVATE_KEY_PATH
+        # Handle explicit disabling vs using defaults
+        if api_key == "" or api_key is None and private_key_path == "":
+            self.api_key_id = None
+        else:
+            self.api_key_id = api_key if api_key is not None else KALSHI_API_KEY_ID
+
+        if private_key_path == "":
+            self.private_key_path = None
+        else:
+            self.private_key_path = private_key_path if private_key_path is not None else KALSHI_PRIVATE_KEY_PATH
+
         self.base_url = base_url or KALSHI_BASE_URL
         self.session = requests.Session()
         self.private_key = None
         self.member_id = None
 
-        # Load private key if available (for API key auth)
-        self._load_private_key()
+        # Load private key if path is configured
+        if self.private_key_path:
+            self._load_private_key()
 
         self.session.headers.update({
             "Content-Type": "application/json"

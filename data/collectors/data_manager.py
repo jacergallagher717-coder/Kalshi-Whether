@@ -16,7 +16,7 @@ from pathlib import Path
 
 from config.settings import (
     FORECASTS_DB, TRADES_DB, DATABASE_PATH,
-    KALSHI_PROD_URL, KALSHI_DEMO_URL, KALSHI_USE_DEMO
+    KALSHI_PROD_URL, KALSHI_DEMO_URL, KALSHI_PUBLIC_URL, KALSHI_USE_DEMO
 )
 from config.locations import ACTIVE_LOCATIONS
 from utils.logger import get_logger
@@ -41,13 +41,14 @@ class DataManager:
             use_production_data: If True, fetch market data from production API
                                  for real prices, while using demo for trading.
         """
-        # Production client for market data (real prices, no auth needed for public data)
+        # Public API client for market data (real prices, no auth needed)
         if use_production_data:
             self.kalshi_client = KalshiClient(
-                base_url=KALSHI_PROD_URL,
-                private_key_path=None  # No auth needed for public market data
+                base_url=KALSHI_PUBLIC_URL,
+                api_key=None,  # No auth needed for public market data
+                private_key_path=""  # Empty string to skip loading
             )
-            logger.info("Using PRODUCTION API for market data (real prices)")
+            logger.info("Using PUBLIC API for market data (real prices, no auth)")
         else:
             self.kalshi_client = KalshiClient()
 
