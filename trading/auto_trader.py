@@ -18,9 +18,11 @@ from dataclasses import dataclass
 from config.settings import (
     AUTO_TRADE_ENABLED, AUTO_TRADE_MAX_DAILY_TRADES,
     AUTO_TRADE_MAX_OPEN_POSITIONS, KALSHI_USE_DEMO,
-    TRADING_CHECK_INTERVAL_MINUTES, MIN_EDGE_THRESHOLD
+    TRADING_CHECK_INTERVAL_MINUTES, MIN_EDGE_THRESHOLD,
+    KALSHI_DEMO_URL
 )
 from data.collectors.kalshi_client import KalshiClient, Order, Position
+from data.collectors.data_manager import DataManager
 from trading.signal_generator import SignalGenerator
 from trading.paper_trader import PaperTrader
 from models.edge_calculator import TradeSignal
@@ -52,7 +54,7 @@ class AutoTrader:
 
     def __init__(
         self,
-        kalshi_client: KalshiClient = None,
+        data_manager: DataManager = None,
         signal_generator: SignalGenerator = None,
         paper_trader: PaperTrader = None,
         exit_strategy: ExitStrategy = None,
@@ -62,14 +64,19 @@ class AutoTrader:
         Initialize the auto trader.
 
         Args:
-            kalshi_client: Kalshi API client
+            data_manager: Data manager with production + demo clients
             signal_generator: Signal generator for market scanning
             paper_trader: Paper trader for local tracking
             exit_strategy: Exit strategy configuration
             live_trading: If True, execute on Kalshi; if False, paper trade only
         """
-        self.kalshi = kalshi_client or KalshiClient()
-        self.signal_generator = signal_generator or SignalGenerator()
+        self.data_manager = data_manager or DataManager()
+
+        # Use trading_client (demo) for executions, kalshi_client (prod) for data
+        self.trading_client = self.data_manager.trading_client
+        self.market_client = self.data_manager.kalshi_client
+
+        self.signal_generator = signal_generator or SignalGenerator(data_manager=self.data_manager)
         self.paper_trader = paper_trader or PaperTrader()
         self.exit_strategy = exit_strategy or ExitStrategy()
         self.live_trading = live_trading and AUTO_TRADE_ENABLED
@@ -183,11 +190,11 @@ class AutoTrader:
             f"Contracts: {signal.recommended_contracts}"
         )
 
-        # Execute on Kalshi if live trading enabled
+        # Execute on Kalshi demo if live trading enabled
         kalshi_order = None
         if self.live_trading:
             try:
-                kalshi_order = self.kalshi.execute_signal(signal)
+                kalshi_order = self.trading_client.execute_signal(signal)
                 if kalshi_order:
                     trade_logger.info(
                         f"KALSHI ORDER | {kalshi_order.order_id} | {ticker} | "
@@ -240,8 +247,8 @@ class AutoTrader:
         Returns:
             Tuple of (should_exit, reason)
         """
-        # Get current market price
-        market = self.kalshi.get_market(position.ticker)
+        # Get current market price from production
+        market = self.market_client.get_market(position.ticker)
         if not market:
             return False, ""
 
@@ -280,12 +287,13 @@ class AutoTrader:
 
     def _execute_exit(self, position):
         """
-        Execute an early exit on Kalshi.
+        Execute an early exit on Kalshi demo.
 
         Args:
             position: Position to exit
         """
-        market = self.kalshi.get_market(position.ticker)
+        # Get market price from production
+        market = self.market_client.get_market(position.ticker)
         if not market:
             logger.error(f"Cannot get market for exit: {position.ticker}")
             return
@@ -303,7 +311,8 @@ class AutoTrader:
             exit_price = max(no_bid - 0.01, 0.01)
 
         try:
-            order = self.kalshi.sell_position(
+            # Execute on demo trading client
+            order = self.trading_client.sell_position(
                 position.ticker,
                 side,
                 position.contracts,
@@ -340,10 +349,10 @@ class AutoTrader:
 
         self.running = True
 
-        # Login to Kalshi if live trading
+        # Login to Kalshi demo if live trading
         if self.live_trading:
-            if not self.kalshi.login():
-                logger.error("Failed to login to Kalshi, falling back to paper trading")
+            if not self.trading_client.login():
+                logger.error("Failed to login to Kalshi demo, falling back to paper trading")
                 self.live_trading = False
 
         scan_count = 0

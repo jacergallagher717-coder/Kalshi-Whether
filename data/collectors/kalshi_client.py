@@ -109,17 +109,18 @@ class KalshiClient:
     Supports both API key signing (for demo) and email/password login.
     """
 
-    def __init__(self, api_key: str = None, private_key_path: str = None):
+    def __init__(self, api_key: str = None, private_key_path: str = None, base_url: str = None):
         """
         Initialize the Kalshi client.
 
         Args:
             api_key: Kalshi API key ID. If not provided, uses KALSHI_API_KEY_ID from settings.
             private_key_path: Path to RSA private key file for signing.
+            base_url: Override base URL (for using production data with demo trading).
         """
         self.api_key_id = api_key or KALSHI_API_KEY_ID
         self.private_key_path = private_key_path or KALSHI_PRIVATE_KEY_PATH
-        self.base_url = KALSHI_BASE_URL
+        self.base_url = base_url or KALSHI_BASE_URL
         self.session = requests.Session()
         self.private_key = None
         self.member_id = None
@@ -135,7 +136,7 @@ class KalshiClient:
         self._last_request_time = 0
         self._min_request_interval = 0.05  # 20 requests/second max
 
-        logger.info("Kalshi client initialized")
+        logger.info(f"Kalshi client initialized (URL: {self.base_url})")
 
     def _load_private_key(self):
         """Load RSA private key from file for request signing."""

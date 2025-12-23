@@ -14,7 +14,10 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 
-from config.settings import FORECASTS_DB, TRADES_DB, DATABASE_PATH
+from config.settings import (
+    FORECASTS_DB, TRADES_DB, DATABASE_PATH,
+    KALSHI_PROD_URL, KALSHI_DEMO_URL, KALSHI_USE_DEMO
+)
 from config.locations import ACTIVE_LOCATIONS
 from utils.logger import get_logger
 from .kalshi_client import KalshiClient, Market, OrderBook
@@ -26,11 +29,33 @@ logger = get_logger("data_manager")
 class DataManager:
     """
     Manages data collection, storage, and retrieval for the trading system.
+
+    Uses production API for market data (real prices) and demo API for trading.
     """
 
-    def __init__(self):
-        """Initialize the data manager."""
-        self.kalshi_client = KalshiClient()
+    def __init__(self, use_production_data: bool = True):
+        """
+        Initialize the data manager.
+
+        Args:
+            use_production_data: If True, fetch market data from production API
+                                 for real prices, while using demo for trading.
+        """
+        # Production client for market data (real prices, no auth needed for public data)
+        if use_production_data:
+            self.kalshi_client = KalshiClient(
+                base_url=KALSHI_PROD_URL,
+                private_key_path=None  # No auth needed for public market data
+            )
+            logger.info("Using PRODUCTION API for market data (real prices)")
+        else:
+            self.kalshi_client = KalshiClient()
+
+        # Demo client for trade execution (with auth)
+        self.trading_client = KalshiClient(
+            base_url=KALSHI_DEMO_URL
+        )
+
         self.weather_client = WeatherClient()
 
         # Ensure database directory exists
@@ -431,8 +456,11 @@ class DataManager:
         """
         results = {}
 
-        # Test Kalshi
-        results["kalshi"] = self.kalshi_client.test_connection()
+        # Test Kalshi production (market data)
+        results["kalshi_data"] = self.kalshi_client.test_connection()
+
+        # Test Kalshi demo (trading) - requires login
+        results["kalshi_trading"] = self.trading_client.login()
 
         # Test weather APIs
         weather_status = self.weather_client.test_connection()
