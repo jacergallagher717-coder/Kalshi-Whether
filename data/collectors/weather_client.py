@@ -1,13 +1,17 @@
 """
-Weather data client combining Open-Meteo and NWS APIs.
+Weather data client combining multiple weather APIs.
 
 Key responsibilities:
 1. Fetch forecasts from multiple models (GFS, ECMWF)
 2. Fetch official NWS forecast
-3. Normalize all forecasts to common format
-4. Handle API errors gracefully
+3. Fetch Visual Crossing commercial forecasts
+4. Normalize all forecasts to common format
+5. Handle API errors gracefully
 
-Both Open-Meteo and NWS APIs are FREE and require NO API key.
+Sources:
+- Open-Meteo (FREE) - GFS and ECMWF models
+- NWS (FREE) - Official US forecasts
+- Visual Crossing (API key required) - Commercial accuracy
 """
 
 import time
@@ -17,6 +21,7 @@ from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 
 from config.locations import LOCATIONS, get_location
+from config.settings import VISUALCROSSING_API_KEY
 from utils.logger import get_logger
 
 logger = get_logger("weather_client")
@@ -52,12 +57,14 @@ class WeatherClient:
     Combines:
     - Open-Meteo API (GFS and ECMWF models)
     - NWS API (Official US forecasts)
+    - Visual Crossing API (Commercial forecasts)
     - Open-Meteo Historical API (for backtesting)
     """
 
     OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
     OPEN_METEO_HISTORICAL_URL = "https://archive-api.open-meteo.com/v1/archive"
     NWS_BASE_URL = "https://api.weather.gov"
+    VISUALCROSSING_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
 
     def __init__(self):
         """Initialize the weather client."""
@@ -67,11 +74,15 @@ class WeatherClient:
             "Accept": "application/json"
         })
 
+        # Visual Crossing API key
+        self.vc_api_key = VISUALCROSSING_API_KEY
+
         # Rate limiting
         self._last_request_time = {}
         self._min_intervals = {
-            "open_meteo": 0.5,  # 2 requests/second
-            "nws": 0.5  # 2 requests/second
+            "open_meteo": 0.5,       # 2 requests/second
+            "nws": 0.5,              # 2 requests/second
+            "visualcrossing": 1.0    # 1 request/second (API limit)
         }
 
         logger.info("Weather client initialized")
@@ -263,6 +274,81 @@ class WeatherClient:
         logger.info(f"Retrieved {len(forecasts)} forecasts from NWS for {location_key}")
         return forecasts
 
+    def get_visualcrossing_forecast(self, location_key: str) -> List[Forecast]:
+        """
+        Fetch forecast from Visual Crossing API.
+
+        Args:
+            location_key: Location identifier (e.g., "NYC")
+
+        Returns:
+            List of Forecast objects
+        """
+        if not self.vc_api_key:
+            logger.debug("Visual Crossing API key not configured")
+            return []
+
+        location = get_location(location_key)
+
+        # Visual Crossing uses city names
+        city_names = {
+            "NYC": "New York City",
+            "CHI": "Chicago",
+            "LA": "Los Angeles",
+            "MIA": "Miami",
+            "AUS": "Austin",
+            "DEN": "Denver",
+            "PHI": "Philadelphia"
+        }
+        city = city_names.get(location_key, location.get("name", location_key))
+
+        # Build URL with location
+        url = f"{self.VISUALCROSSING_URL}/{city}"
+        params = {
+            "unitGroup": "us",
+            "key": self.vc_api_key,
+            "contentType": "json",
+            "include": "days"
+        }
+
+        response = self._request(url, params=params, api="visualcrossing")
+
+        if not response:
+            logger.warning(f"No response from Visual Crossing for {location_key}")
+            return []
+
+        forecasts = []
+        forecast_time = datetime.utcnow()
+
+        # Parse the daily forecasts
+        days = response.get("days", [])
+
+        for day in days[:7]:  # Get up to 7 days
+            try:
+                date_str = day.get("datetime", "")
+                target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+
+                high = day.get("tempmax")
+                low = day.get("tempmin")
+
+                if high is not None or low is not None:
+                    forecasts.append(Forecast(
+                        source="visualcrossing",
+                        location=location_key,
+                        forecast_time=forecast_time,
+                        target_date=target_date,
+                        high_temp_f=high,
+                        low_temp_f=low,
+                        raw_data={"day": day}
+                    ))
+
+            except (ValueError, KeyError, TypeError) as e:
+                logger.debug(f"Error parsing Visual Crossing day: {e}")
+                continue
+
+        logger.info(f"Retrieved {len(forecasts)} forecasts from Visual Crossing for {location_key}")
+        return forecasts
+
     def get_all_forecasts(self, location_key: str) -> Dict[str, List[Forecast]]:
         """
         Fetch forecasts from all sources for a location.
@@ -276,7 +362,8 @@ class WeatherClient:
         all_forecasts = {
             "gfs": [],
             "ecmwf": [],
-            "nws": []
+            "nws": [],
+            "visualcrossing": []
         }
 
         # Get Open-Meteo forecasts (GFS and ECMWF)
@@ -288,6 +375,10 @@ class WeatherClient:
         # Get NWS forecast
         nws_forecasts = self.get_nws_forecast(location_key)
         all_forecasts["nws"] = nws_forecasts
+
+        # Get Visual Crossing forecast
+        vc_forecasts = self.get_visualcrossing_forecast(location_key)
+        all_forecasts["visualcrossing"] = vc_forecasts
 
         return all_forecasts
 
@@ -425,6 +516,23 @@ class WeatherClient:
         except Exception as e:
             results["nws"] = False
             logger.error(f"NWS connection failed: {e}")
+
+        # Test Visual Crossing
+        if self.vc_api_key:
+            try:
+                response = self._request(
+                    f"{self.VISUALCROSSING_URL}/New York City",
+                    params={"unitGroup": "us", "key": self.vc_api_key, "contentType": "json"},
+                    api="visualcrossing"
+                )
+                results["visualcrossing"] = response is not None
+                logger.info(f"Visual Crossing connection: {'success' if results['visualcrossing'] else 'failed'}")
+            except Exception as e:
+                results["visualcrossing"] = False
+                logger.error(f"Visual Crossing connection failed: {e}")
+        else:
+            results["visualcrossing"] = False
+            logger.info("Visual Crossing: API key not configured")
 
         return results
 

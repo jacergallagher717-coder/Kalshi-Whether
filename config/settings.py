@@ -16,6 +16,9 @@ KALSHI_PRIVATE_KEY_PATH = os.getenv("KALSHI_PRIVATE_KEY_PATH", "./kalshi_private
 KALSHI_EMAIL = os.getenv("KALSHI_EMAIL", "")
 KALSHI_PASSWORD = os.getenv("KALSHI_PASSWORD", "")
 
+# Visual Crossing Weather API
+VISUALCROSSING_API_KEY = os.getenv("VISUALCROSSING_API_KEY", "")
+
 # Use demo API by default for safety (set KALSHI_USE_DEMO=false for production)
 KALSHI_USE_DEMO = os.getenv("KALSHI_USE_DEMO", "true").lower() == "true"
 KALSHI_DEMO_URL = "https://demo-api.kalshi.co/trade-api/v2"
@@ -40,9 +43,10 @@ CONFIDENCE_LEVELS = {
 
 # Model Weights for Ensemble
 MODEL_WEIGHTS = {
-    "ecmwf": 0.40,      # European model - most accurate
-    "gfs": 0.35,        # American model - good for short term
-    "nws": 0.25         # Official forecast - what most people see
+    "ecmwf": 0.30,           # European model - most accurate
+    "gfs": 0.25,             # American model - good for short term
+    "nws": 0.20,             # Official forecast - what most people see
+    "visualcrossing": 0.25   # Visual Crossing - commercial accuracy
 }
 
 # Temperature Probability Distribution
