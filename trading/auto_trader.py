@@ -417,17 +417,44 @@ class AutoTrader:
 
 # Example usage
 if __name__ == "__main__":
+    import argparse
     from utils.logger import setup_logger
     setup_logger()
 
-    print("Testing AutoTrader...")
+    parser = argparse.ArgumentParser(description="Weather Market Auto Trader")
+    parser.add_argument("--run", action="store_true", help="Run continuous trading loop")
+    parser.add_argument("--live", action="store_true", help="Enable live trading on Kalshi demo")
+    parser.add_argument("--execute", action="store_true", help="Execute trades on single scan")
+    parser.add_argument("--interval", type=int, default=15, help="Scan interval in minutes")
+    args = parser.parse_args()
 
-    trader = AutoTrader(live_trading=False)
+    # Enable live trading if --live flag or AUTO_TRADE_ENABLED is set
+    live_mode = args.live or AUTO_TRADE_ENABLED
 
-    # Single scan
-    signals = trader.scan_and_execute(auto_execute=False)
-    print(f"Found {len(signals)} signals")
+    print(f"\n{'='*50}")
+    print("WEATHER MARKET AUTO TRADER")
+    print(f"{'='*50}")
+    print(f"Live Trading: {'ENABLED' if live_mode else 'DISABLED (paper only)'}")
+    print(f"Demo Mode: {'YES' if KALSHI_USE_DEMO else 'NO - PRODUCTION!'}")
+    print(f"{'='*50}\n")
 
-    # Show status
-    status = trader.get_status()
-    print(f"\nStatus: {status}")
+    trader = AutoTrader(live_trading=live_mode)
+
+    if args.run:
+        # Run continuous trading loop
+        trader.run_continuous(interval_minutes=args.interval)
+    else:
+        # Single scan
+        signals = trader.scan_and_execute(auto_execute=args.execute or live_mode)
+        print(f"\nFound {len(signals)} signals")
+
+        if signals:
+            print("\nTop signals:")
+            for sig in signals[:5]:
+                print(f"  {sig.ticker}: {sig.direction} @ ${sig.market_price:.2f} | Edge: {sig.edge:.1%}")
+
+        # Show status
+        status = trader.get_status()
+        print(f"\nStatus:")
+        print(f"  Trades today: {status['trades_today']}/{status['max_daily_trades']}")
+        print(f"  Open positions: {status['open_positions']}/{status['max_open_positions']}")
