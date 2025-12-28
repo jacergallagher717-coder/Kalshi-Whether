@@ -28,13 +28,13 @@ KALSHI_BASE_URL = KALSHI_DEMO_URL if KALSHI_USE_DEMO else KALSHI_PROD_URL
 
 # Auto-trading Configuration
 AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
-AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "10"))
-AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "5"))
+AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "50"))
+AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "20"))
 
 # Trading Parameters
-MIN_EDGE_THRESHOLD = 0.10      # Minimum 10% edge to consider trade
-MAX_POSITION_SIZE = 100        # Max $100 per paper trade
-MAX_CONTRACTS_PER_TRADE = 50   # Maximum contracts per single trade
+MIN_EDGE_THRESHOLD = 0.20      # Minimum 20% edge to consider trade
+MAX_POSITION_SIZE = 200        # Max $200 per trade
+MAX_CONTRACTS_PER_TRADE = 100  # Maximum contracts per single trade
 
 CONFIDENCE_LEVELS = {
     "high": 0.15,              # 15%+ edge = high confidence

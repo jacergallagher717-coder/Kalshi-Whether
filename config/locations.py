@@ -35,9 +35,9 @@ LOCATIONS = {
         "longitude": -118.2437,
         "timezone": "America/Los_Angeles",
         "nws_gridpoint": "LOX/154,44",
-        "kalshi_high_prefix": "HIGHLA",
-        "kalshi_low_prefix": "LOWLA",
-        "settlement_station": "Downtown LA"
+        "kalshi_high_prefix": "HIGHLAX",
+        "kalshi_low_prefix": "LOWLAX",
+        "settlement_station": "LAX Airport"
     },
     "MIA": {
         "name": "Miami",
@@ -48,11 +48,41 @@ LOCATIONS = {
         "kalshi_high_prefix": "HIGHMIA",
         "kalshi_low_prefix": "LOWMIA",
         "settlement_station": "Miami International Airport"
+    },
+    "AUS": {
+        "name": "Austin",
+        "latitude": 30.2672,
+        "longitude": -97.7431,
+        "timezone": "America/Chicago",
+        "nws_gridpoint": "EWX/156,91",
+        "kalshi_high_prefix": "HIGHAUS",
+        "kalshi_low_prefix": "LOWAUS",
+        "settlement_station": "Camp Mabry"
+    },
+    "DEN": {
+        "name": "Denver",
+        "latitude": 39.7392,
+        "longitude": -104.9903,
+        "timezone": "America/Denver",
+        "nws_gridpoint": "BOU/62,60",
+        "kalshi_high_prefix": "HIGHDEN",
+        "kalshi_low_prefix": "LOWDEN",
+        "settlement_station": "Denver International Airport"
+    },
+    "PHI": {
+        "name": "Philadelphia",
+        "latitude": 39.9526,
+        "longitude": -75.1652,
+        "timezone": "America/New_York",
+        "nws_gridpoint": "PHI/49,75",
+        "kalshi_high_prefix": "HIGHPHIL",
+        "kalshi_low_prefix": "LOWPHIL",
+        "settlement_station": "Philadelphia International Airport"
     }
 }
 
-# Active locations for trading (start with just NYC)
-ACTIVE_LOCATIONS = ["NYC"]
+# Active locations for trading - ALL CITIES
+ACTIVE_LOCATIONS = ["NYC", "CHI", "LA", "MIA", "AUS", "DEN", "PHI"]
 
 
 def get_location(location_key: str) -> dict:
