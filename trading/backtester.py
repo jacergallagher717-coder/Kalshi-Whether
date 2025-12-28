@@ -186,9 +186,11 @@ class WeatherBacktester:
                 try:
                     record_date = datetime.strptime(record["DATE"], "%Y-%m-%d").date()
                     # TMAX/TMIN are in tenths of degrees Celsius from NCEI
-                    # Convert to Fahrenheit
-                    tmax_c = record.get("TMAX", 0) / 10
-                    tmin_c = record.get("TMIN", 0) / 10
+                    # Convert to Fahrenheit (handle string values)
+                    tmax_raw = record.get("TMAX", 0)
+                    tmin_raw = record.get("TMIN", 0)
+                    tmax_c = float(tmax_raw) / 10 if tmax_raw else 0
+                    tmin_c = float(tmin_raw) / 10 if tmin_raw else 0
                     tmax_f = tmax_c * 9/5 + 32
                     tmin_f = tmin_c * 9/5 + 32
 
