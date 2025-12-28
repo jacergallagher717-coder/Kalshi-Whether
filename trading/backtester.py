@@ -10,6 +10,7 @@ This module:
 
 import sqlite3
 import requests
+import random
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
@@ -389,7 +390,7 @@ class WeatherBacktester:
 
                 # Our model's probability (based on forecast accuracy)
                 # Simulate 2°F forecast error on average
-                forecast_temp = day.actual_high + statistics.gauss(0, 2)
+                forecast_temp = day.actual_high + random.gauss(0, 2)
                 forecast_diff = forecast_temp - threshold
 
                 if forecast_diff > 8:
