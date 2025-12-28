@@ -15,13 +15,13 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import statistics
 
-from config.settings import DATA_DIR
+from config.settings import DATABASE_PATH
 from config.locations import LOCATIONS
 from utils.logger import get_logger
 
 logger = get_logger("backtester")
 
-BACKTEST_DB = DATA_DIR / "backtest.db"
+BACKTEST_DB = DATABASE_PATH + "backtest.db"
 
 
 @dataclass
