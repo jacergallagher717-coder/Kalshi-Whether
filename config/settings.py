@@ -32,9 +32,9 @@ AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "999"
 AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "999"))  # Unlimited
 
 # Trading Parameters
-MIN_EDGE_THRESHOLD = 0.20      # Minimum 20% edge to consider trade
-MAX_POSITION_SIZE = 200        # Max $200 per trade
-MAX_CONTRACTS_PER_TRADE = 100  # Maximum contracts per single trade
+MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.20"))  # Minimum 20% edge
+MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "200"))  # Max per trade
+MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "100"))  # Max contracts
 
 CONFIDENCE_LEVELS = {
     "high": 0.15,              # 15%+ edge = high confidence
