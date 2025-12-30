@@ -16,7 +16,8 @@ from pathlib import Path
 
 from config.settings import (
     FORECASTS_DB, TRADES_DB, DATABASE_PATH,
-    KALSHI_PROD_URL, KALSHI_DEMO_URL, KALSHI_PUBLIC_URL, KALSHI_USE_DEMO
+    KALSHI_PROD_URL, KALSHI_DEMO_URL, KALSHI_PUBLIC_URL, KALSHI_USE_DEMO,
+    KALSHI_BASE_URL
 )
 from config.locations import ACTIVE_LOCATIONS
 from utils.logger import get_logger
@@ -52,9 +53,10 @@ class DataManager:
         else:
             self.kalshi_client = KalshiClient()
 
-        # Demo client for trade execution (with auth)
+        # Trading client for trade execution (with auth)
+        # Uses KALSHI_BASE_URL which respects KALSHI_USE_DEMO setting
         self.trading_client = KalshiClient(
-            base_url=KALSHI_DEMO_URL
+            base_url=KALSHI_BASE_URL
         )
 
         self.weather_client = WeatherClient()
