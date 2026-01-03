@@ -13,6 +13,7 @@ import uuid
 
 from config.settings import (
     MIN_EDGE_THRESHOLD, MAX_POSITION_SIZE, MAX_CONTRACTS_PER_TRADE,
+    MIN_YES_PRICE, MAX_NO_PRICE_BRACKET, BRACKET_POSITION_SCALE,
     calculate_kalshi_fee, get_confidence_level
 )
 from utils.logger import get_logger
@@ -348,6 +349,22 @@ class EdgeCalculator:
             logger.debug(f"Skipping {ticker}: negative EV after fees")
             return None
 
+        # Check if this is a bracket market (ticker contains 'B' followed by digits after date)
+        is_bracket = '-B' in ticker
+
+        # Price filters based on Jan 2 analysis
+        if trade_direction == "BUY_YES":
+            # Don't buy very cheap YES (long shots that rarely hit)
+            if market_price < MIN_YES_PRICE:
+                logger.debug(f"Skipping {ticker}: YES price ${market_price:.2f} below minimum ${MIN_YES_PRICE:.2f}")
+                return None
+        else:  # BUY_NO
+            no_price = 1.0 - market_price
+            # Don't buy expensive NO on bracket markets (narrow ranges are risky)
+            if is_bracket and no_price > MAX_NO_PRICE_BRACKET:
+                logger.debug(f"Skipping {ticker}: NO price ${no_price:.2f} above bracket max ${MAX_NO_PRICE_BRACKET:.2f}")
+                return None
+
         # Determine confidence level
         confidence = get_confidence_level(abs(edge))
 
@@ -361,6 +378,11 @@ class EdgeCalculator:
         recommended_contracts = self.calculate_position_size(
             edge, entry_price, trade_direction, kelly_fraction
         )
+
+        # Scale down position size for bracket markets (they're harder to predict)
+        if is_bracket:
+            recommended_contracts = max(1, int(recommended_contracts * BRACKET_POSITION_SCALE))
+            logger.debug(f"Scaled bracket position to {recommended_contracts} contracts")
 
         # Calculate costs and potential outcomes
         total_cost = entry_price * recommended_contracts

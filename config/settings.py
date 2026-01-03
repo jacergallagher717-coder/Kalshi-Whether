@@ -36,6 +36,11 @@ MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.20"))  # Minimum 2
 MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "200"))  # Max per trade
 MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "100"))  # Max contracts
 
+# Price Filters (based on Jan 2 analysis - avoid expensive losses)
+MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.08"))  # Don't buy YES below 8 cents
+MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.50"))  # Don't buy NO on brackets above 50 cents
+BRACKET_POSITION_SCALE = float(os.getenv("BRACKET_POSITION_SCALE", "0.5"))  # Half position size on brackets
+
 CONFIDENCE_LEVELS = {
     "high": 0.15,              # 15%+ edge = high confidence
     "medium": 0.10,            # 10-15% edge = medium confidence
