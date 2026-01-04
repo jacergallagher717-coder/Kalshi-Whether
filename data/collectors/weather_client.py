@@ -62,6 +62,7 @@ class WeatherClient:
     """
 
     OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+    OPEN_METEO_ECMWF_URL = "https://api.open-meteo.com/v1/ecmwf"  # ECMWF needs separate endpoint
     OPEN_METEO_HISTORICAL_URL = "https://archive-api.open-meteo.com/v1/archive"
     NWS_BASE_URL = "https://api.weather.gov"
     VISUALCROSSING_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
@@ -149,17 +150,29 @@ class WeatherClient:
         forecasts = []
 
         for model in models:
-            params = {
-                "latitude": location["latitude"],
-                "longitude": location["longitude"],
-                "daily": "temperature_2m_max,temperature_2m_min",
-                "temperature_unit": "fahrenheit",
-                "timezone": location["timezone"],
-                "forecast_days": 7,
-                "models": model
-            }
+            # ECMWF requires a different API endpoint than GFS
+            if model == "ecmwf_ifs04":
+                url = self.OPEN_METEO_ECMWF_URL
+                params = {
+                    "latitude": location["latitude"],
+                    "longitude": location["longitude"],
+                    "daily": "temperature_2m_max,temperature_2m_min",
+                    "temperature_unit": "fahrenheit",
+                    "timezone": location["timezone"]
+                }
+            else:
+                url = self.OPEN_METEO_FORECAST_URL
+                params = {
+                    "latitude": location["latitude"],
+                    "longitude": location["longitude"],
+                    "daily": "temperature_2m_max,temperature_2m_min",
+                    "temperature_unit": "fahrenheit",
+                    "timezone": location["timezone"],
+                    "forecast_days": 7,
+                    "models": model
+                }
 
-            response = self._request(self.OPEN_METEO_FORECAST_URL, params=params)
+            response = self._request(url, params=params)
 
             if not response:
                 logger.warning(f"No response from Open-Meteo for model {model}")
