@@ -14,7 +14,7 @@ import uuid
 from config.settings import (
     MIN_EDGE_THRESHOLD, MAX_POSITION_SIZE, MAX_CONTRACTS_PER_TRADE,
     MIN_YES_PRICE, MAX_NO_PRICE_BRACKET, BRACKET_POSITION_SCALE,
-    calculate_kalshi_fee, get_confidence_level
+    MAX_MODEL_SPREAD, calculate_kalshi_fee, get_confidence_level
 )
 from utils.logger import get_logger
 from utils.helpers import calculate_days_until, format_percent, format_currency
@@ -322,6 +322,14 @@ class EdgeCalculator:
         model_probs = prob_result["model_probs"]
         model_spread = prob_result["model_spread"]
         prob_confidence = prob_result["confidence"]
+
+        # Check forecast model agreement (skip if models disagree too much)
+        forecast_temps = list(forecasts.values())
+        if len(forecast_temps) >= 2:
+            temp_spread = max(forecast_temps) - min(forecast_temps)
+            if temp_spread > MAX_MODEL_SPREAD:
+                logger.debug(f"Skipping {ticker}: model temp spread {temp_spread:.1f}°F exceeds max {MAX_MODEL_SPREAD}°F")
+                return None
 
         # Calculate edge
         raw_edge = self.calculate_edge(market_price, our_probability)

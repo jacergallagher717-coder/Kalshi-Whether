@@ -32,7 +32,7 @@ AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "999"
 AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "999"))  # Unlimited
 
 # Trading Parameters
-MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.20"))  # Minimum 20% edge
+MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.25"))  # Minimum 25% edge (increased for accuracy)
 MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "200"))  # Max per trade
 MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "100"))  # Max contracts
 
@@ -40,6 +40,7 @@ MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "100"))  # Ma
 MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.08"))  # Don't buy YES below 8 cents
 MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.50"))  # Don't buy NO on brackets above 50 cents
 BRACKET_POSITION_SCALE = float(os.getenv("BRACKET_POSITION_SCALE", "0.5"))  # Half position size on brackets
+MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "4.0"))  # Skip trades when forecast models disagree by more than 4°F
 
 CONFIDENCE_LEVELS = {
     "high": 0.15,              # 15%+ edge = high confidence
@@ -47,12 +48,12 @@ CONFIDENCE_LEVELS = {
     "low": 0.05                # 5-10% edge = low confidence (no trade)
 }
 
-# Model Weights for Ensemble
+# Model Weights for Ensemble (adjusted based on accuracy analysis)
 MODEL_WEIGHTS = {
-    "ecmwf": 0.30,           # European model - most accurate
-    "gfs": 0.25,             # American model - good for short term
+    "ecmwf": 0.40,           # European model - most accurate (increased from 30%)
+    "gfs": 0.20,             # American model - good for short term (reduced from 25%)
     "nws": 0.20,             # Official forecast - what most people see
-    "visualcrossing": 0.25   # Visual Crossing - commercial accuracy
+    "visualcrossing": 0.20   # Visual Crossing - commercial accuracy (reduced from 25%)
 }
 
 # Temperature Probability Distribution
