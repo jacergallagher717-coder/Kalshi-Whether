@@ -178,10 +178,22 @@ class AutoTrader:
         ticker = signal.ticker
 
         # Check if we already have a position in this market
-        existing = self.paper_trader.get_position(ticker)
-        if existing:
-            logger.info(f"Already have position in {ticker}, skipping")
-            return False
+        if self.live_trading:
+            # Check real Kalshi positions when live trading
+            try:
+                kalshi_positions = self.trading_client.get_positions()
+                for pos in kalshi_positions:
+                    if pos.ticker == ticker and pos.count > 0:
+                        logger.info(f"Already have REAL position in {ticker}, skipping")
+                        return False
+            except Exception as e:
+                logger.warning(f"Could not check Kalshi positions: {e}")
+        else:
+            # Check paper positions when paper trading
+            existing = self.paper_trader.get_position(ticker)
+            if existing:
+                logger.info(f"Already have paper position in {ticker}, skipping")
+                return False
 
         # Log the trade attempt
         trade_logger.info(
