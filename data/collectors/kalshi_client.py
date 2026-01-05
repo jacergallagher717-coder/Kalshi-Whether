@@ -685,7 +685,7 @@ class KalshiClient:
             data["yes_price"] = price_cents if side == "yes" else None
             data["no_price"] = price_cents if side == "no" else None
 
-        response = self._request("POST", "/portfolio/orders", data=data)
+        response = self._request("POST", "/exchange/orders", data=data)
 
         if response and "order" in response:
             order_data = response["order"]
@@ -762,7 +762,7 @@ class KalshiClient:
         Returns:
             True if cancelled successfully
         """
-        response = self._request("DELETE", f"/portfolio/orders/{order_id}")
+        response = self._request("DELETE", f"/exchange/orders/{order_id}")
         if response:
             logger.info(f"Cancelled order {order_id}")
             return True
