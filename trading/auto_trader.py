@@ -87,6 +87,13 @@ class AutoTrader:
         self.last_scan_time = None
         self.daily_reset_date = date.today()
 
+        # SAFEGUARD: Track tickers we've already traded this session
+        self.traded_tickers_today: set = set()
+
+        # SAFEGUARD: Hard limits
+        self.MAX_TRADES_PER_DAY = 5  # Hard cap regardless of config
+        self.MAX_PORTFOLIO_PERCENT = 0.50  # Never deploy more than 50% of portfolio
+
         # For graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -102,6 +109,7 @@ class AutoTrader:
         """Reset daily counters if it's a new day."""
         if date.today() != self.daily_reset_date:
             self.trades_today = 0
+            self.traded_tickers_today.clear()
             self.daily_reset_date = date.today()
             logger.info("Daily counters reset")
 
@@ -114,7 +122,11 @@ class AutoTrader:
         """
         self._reset_daily_counters()
 
-        # Check daily limit
+        # HARD LIMIT: Max trades per day (overrides config)
+        if self.trades_today >= self.MAX_TRADES_PER_DAY:
+            return False, f"HARD LIMIT: Daily trades reached ({self.MAX_TRADES_PER_DAY})"
+
+        # Check config daily limit too
         if self.trades_today >= AUTO_TRADE_MAX_DAILY_TRADES:
             return False, f"Daily limit reached ({AUTO_TRADE_MAX_DAILY_TRADES})"
 
@@ -122,6 +134,20 @@ class AutoTrader:
         open_positions = self.paper_trader.get_open_positions()
         if len(open_positions) >= AUTO_TRADE_MAX_OPEN_POSITIONS:
             return False, f"Max open positions reached ({AUTO_TRADE_MAX_OPEN_POSITIONS})"
+
+        # HARD LIMIT: Check portfolio deployment
+        if self.live_trading:
+            try:
+                balance = self.trading_client.get_balance()
+                if balance:
+                    total_portfolio = balance.get('total', 0)
+                    cash = balance.get('available', 0) or balance.get('balance', 0)
+                    if total_portfolio > 0:
+                        deployed_pct = 1 - (cash / total_portfolio)
+                        if deployed_pct >= self.MAX_PORTFOLIO_PERCENT:
+                            return False, f"HARD LIMIT: Portfolio {deployed_pct:.0%} deployed (max {self.MAX_PORTFOLIO_PERCENT:.0%})"
+            except Exception as e:
+                logger.warning(f"Could not check portfolio deployment: {e}")
 
         return True, "OK"
 
@@ -177,17 +203,25 @@ class AutoTrader:
         """
         ticker = signal.ticker
 
-        # Check if we already have a position in this market
+        # SAFEGUARD 1: Check in-memory tracking first (bulletproof)
+        if ticker in self.traded_tickers_today:
+            logger.info(f"SAFEGUARD: Already traded {ticker} today, skipping")
+            return False
+
+        # SAFEGUARD 2: Check if we already have a position in this market
         if self.live_trading:
             # Check real Kalshi positions when live trading
             try:
                 kalshi_positions = self.trading_client.get_positions()
                 for pos in kalshi_positions:
-                    if pos.ticker == ticker and pos.count > 0:
-                        logger.info(f"Already have REAL position in {ticker}, skipping")
+                    # Use market_exposure (not count) - position exists if exposure > 0
+                    if pos.ticker == ticker and pos.market_exposure != 0:
+                        logger.info(f"Already have REAL position in {ticker} (exposure: {pos.market_exposure}), skipping")
                         return False
             except Exception as e:
-                logger.warning(f"Could not check Kalshi positions: {e}")
+                # FAIL SAFE: If we can't check positions, DON'T TRADE
+                logger.error(f"SAFEGUARD: Could not verify positions, refusing to trade: {e}")
+                return False
         else:
             # Check paper positions when paper trading
             existing = self.paper_trader.get_position(ticker)
@@ -202,7 +236,7 @@ class AutoTrader:
             f"Contracts: {signal.recommended_contracts}"
         )
 
-        # Execute on Kalshi demo if live trading enabled
+        # Execute on Kalshi if live trading enabled
         kalshi_order = None
         if self.live_trading:
             try:
@@ -212,19 +246,28 @@ class AutoTrader:
                         f"KALSHI ORDER | {kalshi_order.order_id} | {ticker} | "
                         f"Status: {kalshi_order.status}"
                     )
+                    # SAFEGUARD: Mark this ticker as traded
+                    self.traded_tickers_today.add(ticker)
+                    self.trades_today += 1
                 else:
                     logger.error(f"Failed to place Kalshi order for {ticker}")
+                    return False
             except Exception as e:
                 logger.error(f"Error placing Kalshi order: {e}")
+                return False
 
-        # Always record in paper trader for tracking
-        paper_trade = self.paper_trader.execute_paper_trade(signal)
+        # Record in paper trader for tracking (if not already tracked via live trade)
+        if not self.live_trading:
+            paper_trade = self.paper_trader.execute_paper_trade(signal)
+            if paper_trade:
+                # Track for paper trading too
+                self.traded_tickers_today.add(ticker)
+                self.trades_today += 1
+                logger.info(f"Paper trade executed: {paper_trade.id} - {ticker}")
+                return True
+            return False
 
-        if paper_trade:
-            logger.info(f"Trade executed: {paper_trade.id} - {ticker}")
-            return True
-
-        return False
+        return True  # Live trade was successful
 
     def check_exits(self) -> List[str]:
         """
