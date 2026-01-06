@@ -31,19 +31,20 @@ AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
 AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "999"))  # No limit - conviction is the filter
 AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "999"))  # No limit - conviction is the filter
 
-# Trading Parameters - ULTRA HIGH CONVICTION ONLY
-MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.40"))  # Minimum 40% edge (was 25%)
-MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.60"))  # Require 60% confidence
-MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.70"))  # Models must be 70% in agreement
-MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "200"))  # Max per trade
-MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "50"))  # Reduced from 100
+# Trading Parameters - BALANCED (based on Jan 5-6 trade analysis)
+# Philly won big with ~40% edge, but we don't want to miss good opportunities
+MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.30"))  # 30% minimum edge
+MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.50"))  # 50% confidence required
+MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.65"))  # 65% model agreement
+MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "150"))  # Max $1.50 per trade
+MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "20"))  # Conservative: max 20 contracts
 
-# Price Filters (based on Jan 2 analysis - avoid expensive losses)
-MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.08"))  # Don't buy YES below 8 cents
-MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.50"))  # Don't buy NO on brackets above 50 cents
+# Price Filters
+MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.10"))  # Don't buy YES below 10 cents (was 8)
+MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.45"))  # Don't buy NO above 45 cents
 BRACKET_POSITION_SCALE = float(os.getenv("BRACKET_POSITION_SCALE", "0.5"))  # Half position size on brackets
-MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "2.5"))  # Only 2.5°F spread allowed (was 4°F)
-MIN_MODELS_REQUIRED = int(os.getenv("MIN_MODELS_REQUIRED", "3"))  # Require at least 3 models reporting
+MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "3.0"))  # 3°F spread allowed (balanced)
+MIN_MODELS_REQUIRED = int(os.getenv("MIN_MODELS_REQUIRED", "3"))  # Require at least 3 models
 
 CONFIDENCE_LEVELS = {
     "high": 0.15,              # 15%+ edge = high confidence
