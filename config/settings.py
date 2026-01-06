@@ -28,19 +28,22 @@ KALSHI_BASE_URL = KALSHI_DEMO_URL if KALSHI_USE_DEMO else KALSHI_PROD_URL
 
 # Auto-trading Configuration
 AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
-AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "999"))  # Unlimited
-AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "999"))  # Unlimited
+AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "999"))  # No limit - conviction is the filter
+AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "999"))  # No limit - conviction is the filter
 
-# Trading Parameters
-MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.25"))  # Minimum 25% edge (increased for accuracy)
+# Trading Parameters - ULTRA HIGH CONVICTION ONLY
+MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.40"))  # Minimum 40% edge (was 25%)
+MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.60"))  # Require 60% confidence
+MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.70"))  # Models must be 70% in agreement
 MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "200"))  # Max per trade
-MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "100"))  # Max contracts
+MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "50"))  # Reduced from 100
 
 # Price Filters (based on Jan 2 analysis - avoid expensive losses)
 MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.08"))  # Don't buy YES below 8 cents
 MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.50"))  # Don't buy NO on brackets above 50 cents
 BRACKET_POSITION_SCALE = float(os.getenv("BRACKET_POSITION_SCALE", "0.5"))  # Half position size on brackets
-MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "4.0"))  # Skip trades when forecast models disagree by more than 4°F
+MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "2.5"))  # Only 2.5°F spread allowed (was 4°F)
+MIN_MODELS_REQUIRED = int(os.getenv("MIN_MODELS_REQUIRED", "3"))  # Require at least 3 models reporting
 
 CONFIDENCE_LEVELS = {
     "high": 0.15,              # 15%+ edge = high confidence

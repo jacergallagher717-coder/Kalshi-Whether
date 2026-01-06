@@ -14,7 +14,8 @@ import uuid
 from config.settings import (
     MIN_EDGE_THRESHOLD, MAX_POSITION_SIZE, MAX_CONTRACTS_PER_TRADE,
     MIN_YES_PRICE, MAX_NO_PRICE_BRACKET, BRACKET_POSITION_SCALE,
-    MAX_MODEL_SPREAD, calculate_kalshi_fee, get_confidence_level
+    MAX_MODEL_SPREAD, MIN_CONFIDENCE_SCORE, MIN_MODEL_AGREEMENT, MIN_MODELS_REQUIRED,
+    calculate_kalshi_fee, get_confidence_level
 )
 from utils.logger import get_logger
 from utils.helpers import calculate_days_until, format_percent, format_currency
@@ -323,12 +324,24 @@ class EdgeCalculator:
         model_spread = prob_result["model_spread"]
         prob_confidence = prob_result["confidence"]
 
-        # Check forecast model agreement (skip if models disagree too much)
-        forecast_temps = list(forecasts.values())
+        # CONVICTION FILTER 1: Require minimum number of models
+        num_models = len([t for t in forecasts.values() if t is not None])
+        if num_models < MIN_MODELS_REQUIRED:
+            logger.debug(f"Skipping {ticker}: only {num_models} models (need {MIN_MODELS_REQUIRED})")
+            return None
+
+        # CONVICTION FILTER 2: Check forecast model agreement (skip if models disagree too much)
+        forecast_temps = [t for t in forecasts.values() if t is not None]
         if len(forecast_temps) >= 2:
             temp_spread = max(forecast_temps) - min(forecast_temps)
             if temp_spread > MAX_MODEL_SPREAD:
                 logger.debug(f"Skipping {ticker}: model temp spread {temp_spread:.1f}°F exceeds max {MAX_MODEL_SPREAD}°F")
+                return None
+
+            # Calculate model agreement score (0-1, higher = more agreement)
+            model_agreement_score = max(0.0, 1.0 - temp_spread / 10.0)
+            if model_agreement_score < MIN_MODEL_AGREEMENT:
+                logger.debug(f"Skipping {ticker}: model agreement {model_agreement_score:.0%} below {MIN_MODEL_AGREEMENT:.0%}")
                 return None
 
         # Calculate edge
@@ -347,9 +360,14 @@ class EdgeCalculator:
             our_probability, market_price, trade_direction
         )
 
-        # Skip if edge below threshold
+        # CONVICTION FILTER 3: Skip if edge below threshold
         if edge < MIN_EDGE_THRESHOLD:
-            logger.debug(f"Skipping {ticker}: edge {edge:.2%} below threshold")
+            logger.debug(f"Skipping {ticker}: edge {edge:.2%} below threshold {MIN_EDGE_THRESHOLD:.0%}")
+            return None
+
+        # CONVICTION FILTER 4: Skip if confidence score too low
+        if prob_confidence < MIN_CONFIDENCE_SCORE:
+            logger.debug(f"Skipping {ticker}: confidence {prob_confidence:.0%} below {MIN_CONFIDENCE_SCORE:.0%}")
             return None
 
         # Skip if EV is negative
@@ -386,6 +404,11 @@ class EdgeCalculator:
         recommended_contracts = self.calculate_position_size(
             edge, entry_price, trade_direction, kelly_fraction
         )
+
+        # CONVICTION-BASED POSITION SIZING: Scale with confidence
+        # Higher confidence = larger position (up to 100%), lower = smaller
+        confidence_scalar = min(1.0, prob_confidence / 0.80)  # 80% confidence = full size
+        recommended_contracts = max(1, int(recommended_contracts * confidence_scalar))
 
         # Scale down position size for bracket markets (they're harder to predict)
         if is_bracket:

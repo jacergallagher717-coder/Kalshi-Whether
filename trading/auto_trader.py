@@ -90,9 +90,9 @@ class AutoTrader:
         # SAFEGUARD: Track tickers we've already traded this session
         self.traded_tickers_today: set = set()
 
-        # SAFEGUARD: Hard limits
-        self.MAX_TRADES_PER_DAY = 5  # Hard cap regardless of config
+        # SAFEGUARD: Portfolio protection (conviction is the only trade filter, but protect capital)
         self.MAX_PORTFOLIO_PERCENT = 0.50  # Never deploy more than 50% of portfolio
+        self.MAX_SINGLE_TRADE_PERCENT = 0.10  # No single trade > 10% of portfolio
 
         # For graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -117,25 +117,15 @@ class AutoTrader:
         """
         Check if we can execute a new trade.
 
+        Note: No arbitrary trade limits - conviction filters in edge_calculator are the gate.
+        This only checks portfolio protection.
+
         Returns:
             Tuple of (can_trade, reason)
         """
         self._reset_daily_counters()
 
-        # HARD LIMIT: Max trades per day (overrides config)
-        if self.trades_today >= self.MAX_TRADES_PER_DAY:
-            return False, f"HARD LIMIT: Daily trades reached ({self.MAX_TRADES_PER_DAY})"
-
-        # Check config daily limit too
-        if self.trades_today >= AUTO_TRADE_MAX_DAILY_TRADES:
-            return False, f"Daily limit reached ({AUTO_TRADE_MAX_DAILY_TRADES})"
-
-        # Check open positions limit
-        open_positions = self.paper_trader.get_open_positions()
-        if len(open_positions) >= AUTO_TRADE_MAX_OPEN_POSITIONS:
-            return False, f"Max open positions reached ({AUTO_TRADE_MAX_OPEN_POSITIONS})"
-
-        # HARD LIMIT: Check portfolio deployment
+        # PORTFOLIO PROTECTION: Check deployment level
         if self.live_trading:
             try:
                 balance = self.trading_client.get_balance()
@@ -145,7 +135,7 @@ class AutoTrader:
                     if total_portfolio > 0:
                         deployed_pct = 1 - (cash / total_portfolio)
                         if deployed_pct >= self.MAX_PORTFOLIO_PERCENT:
-                            return False, f"HARD LIMIT: Portfolio {deployed_pct:.0%} deployed (max {self.MAX_PORTFOLIO_PERCENT:.0%})"
+                            return False, f"PORTFOLIO PROTECTION: {deployed_pct:.0%} deployed (max {self.MAX_PORTFOLIO_PERCENT:.0%})"
             except Exception as e:
                 logger.warning(f"Could not check portfolio deployment: {e}")
 
