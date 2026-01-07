@@ -24,7 +24,7 @@ from utils.logger import get_logger
 from utils.helpers import calculate_days_until, format_percent, format_currency
 from .probability import ensemble_probability, get_breakeven_temp
 from .ensemble import EnsembleModel
-import pytz
+from zoneinfo import ZoneInfo
 
 logger = get_logger("edge_calculator")
 
@@ -45,7 +45,7 @@ def is_in_trading_window() -> tuple[bool, str]:
         return True, "Trading window disabled"
 
     try:
-        eastern = pytz.timezone('US/Eastern')
+        eastern = ZoneInfo('America/New_York')
         now_et = datetime.now(eastern)
         hour = now_et.hour
 

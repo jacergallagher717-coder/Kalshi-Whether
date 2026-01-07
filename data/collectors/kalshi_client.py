@@ -614,14 +614,35 @@ class KalshiClient:
         """
         response = self._request("GET", "/portfolio/balance")
         if response:
-            balance = response.get("balance", 0)
+            # Debug: log raw response to help diagnose issues
+            logger.debug(f"Raw balance response: {response}")
+
+            # Parse total balance (try multiple possible field names)
+            balance = response.get("balance", 0) or response.get("portfolio_balance", 0)
             # Convert cents to dollars if needed
             if balance > 1000:
                 balance = balance / 100
+
+            # Parse available balance (try multiple possible field names)
+            available = (
+                response.get("available_balance", 0) or
+                response.get("payout_available", 0) or
+                response.get("cash_balance", 0) or
+                0
+            )
+            # Convert cents to dollars if needed
+            if available > 100:
+                available = available / 100
+
+            # Fallback: if available is 0 but balance exists, use balance
+            # (this handles API changes or edge cases)
+            if available == 0 and balance > 0:
+                logger.warning(f"available_balance is 0 but balance is ${balance:.2f}, using balance")
+                available = balance
+
             return {
                 "balance": balance,
-                "available_balance": response.get("available_balance", 0) / 100
-                if response.get("available_balance", 0) > 100 else response.get("available_balance", 0)
+                "available_balance": available
             }
         return None
 
