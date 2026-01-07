@@ -74,13 +74,13 @@ def forecast_to_probability(
         0.933  # ~93% chance temp > 82 when forecast is 85 with 2°F std dev
     """
     # Get uncertainty for this forecast horizon
-    std_dev = TEMP_UNCERTAINTY.get(days_out, 8.0)
-
-    # Clamp days_out to valid range
-    if days_out < 1:
-        std_dev = TEMP_UNCERTAINTY[1]
+    # Same-day (0) has tightest uncertainty, increases with days out
+    if days_out < 0:
+        std_dev = TEMP_UNCERTAINTY[0]  # Use same-day for past dates (shouldn't happen)
     elif days_out > 7:
-        std_dev = TEMP_UNCERTAINTY[7]
+        std_dev = TEMP_UNCERTAINTY[7]  # Cap at 7-day uncertainty
+    else:
+        std_dev = TEMP_UNCERTAINTY.get(days_out, TEMP_UNCERTAINTY[1])
 
     # Create normal distribution centered on forecast
     dist = stats.norm(loc=forecast_temp, scale=std_dev)

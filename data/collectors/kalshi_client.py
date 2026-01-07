@@ -823,13 +823,16 @@ class KalshiClient:
         contracts = signal.recommended_contracts
 
         if signal.direction == "BUY_YES":
-            # Buy YES - pay up to 10% more than market to ensure fill
-            limit_price = min(signal.market_price + 0.10, 0.95)
+            # Buy YES - pay small premium to ensure fill
+            # Use 5% premium, with min 2 cents and max 5 cents overpay
+            premium = max(0.02, min(0.05, signal.market_price * 0.05))
+            limit_price = min(signal.market_price + premium, 0.95)
             return self.buy_yes(ticker, contracts, limit_price)
         else:
-            # Buy NO - pay up to 10% more than market to ensure fill
+            # Buy NO - pay small premium to ensure fill
             no_price = 1.0 - signal.market_price
-            limit_price = min(no_price + 0.10, 0.95)
+            premium = max(0.02, min(0.05, no_price * 0.05))
+            limit_price = min(no_price + premium, 0.95)
             return self.buy_no(ticker, contracts, limit_price)
 
 

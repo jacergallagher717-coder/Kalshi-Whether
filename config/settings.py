@@ -98,6 +98,7 @@ USE_CITY_WEIGHTS = os.getenv("USE_CITY_WEIGHTS", "true").lower() == "true"
 # Standard deviation for temperature forecasts (in °F)
 # Increases with forecast horizon
 TEMP_UNCERTAINTY = {
+    0: 1.0,   # Same day: ±1°F std dev (forecasts very accurate)
     1: 2.0,   # 1 day out: ±2°F std dev
     2: 3.0,   # 2 days out: ±3°F std dev
     3: 4.0,   # 3 days out: ±4°F std dev

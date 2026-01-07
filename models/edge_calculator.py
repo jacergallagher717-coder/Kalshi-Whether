@@ -557,6 +557,22 @@ class EdgeCalculator:
         Returns:
             TradeSignal or None
         """
+        # LIQUIDITY FILTER: Skip illiquid markets
+        # Wide spreads destroy edge on exit
+        if market.yes_bid > 0 and market.yes_ask > 0:
+            spread = market.yes_ask - market.yes_bid
+            mid_price = (market.yes_bid + market.yes_ask) / 2
+            if mid_price > 0.05:  # Only check spread for non-penny stocks
+                spread_pct = spread / mid_price
+                if spread_pct > 0.15:  # Skip if spread > 15% of price
+                    logger.debug(f"Skipping {market.ticker}: spread {spread_pct:.0%} too wide (bid={market.yes_bid:.2f}, ask={market.yes_ask:.2f})")
+                    return None
+
+        # VOLUME FILTER: Skip very low volume markets (optional, less strict)
+        if market.volume is not None and market.volume < 10:
+            logger.debug(f"Skipping {market.ticker}: volume {market.volume} too low")
+            return None
+
         # Extract relevant forecast temps based on market type
         temp_forecasts = {}
         for source, temps in forecasts.items():
