@@ -39,6 +39,7 @@ from trading.auto_trader import AutoTrader
 from analysis.performance import PerformanceAnalyzer
 from analysis.edge_validation import EdgeValidator
 from analysis.reports import ReportGenerator
+from analysis.backtest import Backtester
 from utils.logger import setup_logger, get_logger
 from utils.helpers import format_currency, format_percent
 
@@ -549,6 +550,47 @@ def cmd_execute(args):
             print("Paper trade failed (may already have position)")
 
 
+def cmd_backtest(args):
+    """Run strategy backtest on historical data."""
+    from datetime import timedelta
+
+    print("\n" + "="*60)
+    print("STRATEGY BACKTEST")
+    print("="*60)
+
+    backtest = Backtester()
+
+    start = date.today() - timedelta(days=args.days)
+    end = date.today()
+
+    if args.optimize:
+        print(f"\nOptimizing parameters over {args.days} days...")
+        opt = backtest.optimize_parameters(start, end)
+
+        if opt['optimal_edge_threshold']:
+            print(f"\n OPTIMAL EDGE THRESHOLD: {opt['optimal_edge_threshold']:.0%}")
+            print("\nAll tested thresholds:")
+            print("-" * 60)
+            print(f"{'Edge':<10} {'Trades':<10} {'Win Rate':<12} {'P&L':<12} {'Sharpe':<10}")
+            print("-" * 60)
+            for r in opt['all_results']:
+                print(f"{r['edge_threshold']*100:.0f}%{'':<6} {r['total_trades']:<10} "
+                      f"{r['win_rate']*100:.0f}%{'':<8} ${r['total_pnl']:<10.2f} {r['sharpe_ratio']:<10.2f}")
+        else:
+            print("\nNot enough data for optimization (need at least 5 trades)")
+
+    elif args.compare:
+        print(backtest.compare_strategies(start, end))
+
+    else:
+        result = backtest.run_backtest(start, end, min_edge=args.min_edge)
+        print(backtest.generate_report(result))
+
+        if result.total_trades == 0:
+            print("\nNo trades found in the database for this period.")
+            print("Run the bot in auto mode to generate trades first.")
+
+
 def cmd_dashboard(args):
     """Show real-time P&L dashboard with Kalshi data."""
     from data.collectors.kalshi_client import KalshiClient
@@ -572,14 +614,18 @@ def cmd_dashboard(args):
         print(f"   Available: ${balance['available_balance']:.2f}")
         print(f"   At Risk:   ${balance['balance'] - balance['available_balance']:.2f}")
 
-    # Open Positions
-    positions = client.get_positions()
-    if positions:
-        print(f"\n📊 OPEN POSITIONS ({len(positions)})")
+    # Open Positions (filter out resting orders with no actual position)
+    all_positions = client.get_positions()
+    # Filter to only show positions with actual filled contracts (market_exposure != 0)
+    filled_positions = [p for p in all_positions if p.market_exposure != 0]
+    resting_only = [p for p in all_positions if p.market_exposure == 0 and p.resting_orders_count > 0]
+
+    if filled_positions:
+        print(f"\n📊 OPEN POSITIONS ({len(filled_positions)} filled)")
         print("-" * 50)
 
         total_exposure = 0
-        for pos in positions:
+        for pos in filled_positions:
             direction = "YES" if pos.market_exposure > 0 else "NO"
             exposure = abs(pos.market_exposure)
             total_exposure += exposure
@@ -588,13 +634,22 @@ def cmd_dashboard(args):
             ticker_parts = pos.ticker.split('-')
             city = ticker_parts[0].replace('KXHIGH', '').replace('KXLOW', '')
 
+            # Show realized P&L if available
+            pnl_str = f" | P&L: ${pos.realized_pnl:+.2f}" if pos.realized_pnl != 0 else ""
+
             print(f"   {pos.ticker}")
-            print(f"      {direction} x{exposure} contracts | City: {city}")
+            print(f"      {direction} x{exposure} contracts | City: {city}{pnl_str}")
 
         print("-" * 50)
-        print(f"   Total Exposure: {total_exposure} contracts")
+        print(f"   Total Filled Contracts: {total_exposure}")
     else:
-        print("\n📊 No open positions")
+        print("\n📊 No filled positions")
+
+    # Show resting orders separately
+    if resting_only:
+        print(f"\n⏳ RESTING ORDERS ({len(resting_only)} pending)")
+        for pos in resting_only:
+            print(f"   {pos.ticker} - {pos.resting_orders_count} orders waiting")
 
     # Recent fills/trades from paper trader
     system = TradingSystem()
@@ -720,6 +775,14 @@ Examples:
     dashboard_parser = subparsers.add_parser("dashboard", help="Show real-time P&L dashboard")
     dashboard_parser.add_argument("--models", action="store_true", help="Include model accuracy report")
     dashboard_parser.set_defaults(func=cmd_dashboard)
+
+    # Backtest command
+    backtest_parser = subparsers.add_parser("backtest", help="Run strategy backtest on historical data")
+    backtest_parser.add_argument("--days", type=int, default=30, help="Number of days to backtest")
+    backtest_parser.add_argument("--min-edge", type=float, default=0.30, help="Minimum edge threshold")
+    backtest_parser.add_argument("--optimize", action="store_true", help="Find optimal edge threshold")
+    backtest_parser.add_argument("--compare", action="store_true", help="Compare different strategies")
+    backtest_parser.set_defaults(func=cmd_backtest)
 
     args = parser.parse_args()
 

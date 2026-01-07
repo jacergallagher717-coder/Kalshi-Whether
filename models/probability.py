@@ -14,10 +14,38 @@ from scipy import stats
 import numpy as np
 from typing import Dict, Optional, Tuple
 
-from config.settings import TEMP_UNCERTAINTY, MODEL_WEIGHTS
+from config.settings import TEMP_UNCERTAINTY, MODEL_WEIGHTS, CITY_MODEL_WEIGHTS, USE_CITY_WEIGHTS
 from utils.logger import get_logger
 
 logger = get_logger("probability")
+
+
+def get_model_weights_for_city(city: str = None) -> Dict[str, float]:
+    """
+    Get model weights, optionally customized for a specific city.
+
+    Cities have different weather patterns and some models perform better
+    in certain regions. For example:
+    - ECMWF tends to be best for coastal cities (NYC, LA, MIA)
+    - GFS can be better for continental cities (CHI, DEN)
+
+    Args:
+        city: City code (NYC, CHI, LA, etc.) or None for defaults
+
+    Returns:
+        Dict of model_name -> weight (sums to 1.0)
+    """
+    if not USE_CITY_WEIGHTS or not city:
+        return MODEL_WEIGHTS
+
+    # Check if we have city-specific weights
+    city_weights = CITY_MODEL_WEIGHTS.get(city)
+    if city_weights:
+        logger.debug(f"Using city-specific weights for {city}")
+        return city_weights
+
+    # Fall back to defaults
+    return MODEL_WEIGHTS
 
 
 def forecast_to_probability(
@@ -73,7 +101,8 @@ def ensemble_probability(
     threshold: float,
     days_out: int,
     direction: str = "above",
-    weights: Dict[str, float] = None
+    weights: Dict[str, float] = None,
+    city: str = None
 ) -> Dict[str, any]:
     """
     Combine multiple forecast sources into ensemble probability.
@@ -87,6 +116,7 @@ def ensemble_probability(
         days_out: Days until settlement
         direction: "above" or "below"
         weights: Optional custom weights. Defaults to MODEL_WEIGHTS.
+        city: Optional city code for city-specific model weights.
 
     Returns:
         Dictionary with:
@@ -96,7 +126,13 @@ def ensemble_probability(
         - confidence: How confident we are in the ensemble (0-1)
         - ensemble_temp: Weighted average temperature forecast
     """
-    weights = weights or MODEL_WEIGHTS
+    # Use provided weights, or city-specific weights, or defaults
+    if weights:
+        effective_weights = weights
+    elif city:
+        effective_weights = get_model_weights_for_city(city)
+    else:
+        effective_weights = MODEL_WEIGHTS
 
     # Calculate probability from each model
     model_probs = {}
@@ -124,7 +160,7 @@ def ensemble_probability(
     weighted_temp_sum = 0.0
 
     for source, prob in model_probs.items():
-        weight = weights.get(source, 0.2)  # Default weight if not specified
+        weight = effective_weights.get(source, 0.2)  # Default weight if not specified
         weighted_prob_sum += prob * weight
         weighted_temp_sum += valid_forecasts[source] * weight
         total_weight += weight

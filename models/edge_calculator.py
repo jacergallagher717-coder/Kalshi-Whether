@@ -16,14 +16,46 @@ from config.settings import (
     MIN_YES_PRICE, MAX_NO_PRICE_BRACKET, BRACKET_POSITION_SCALE,
     MAX_MODEL_SPREAD, MIN_CONFIDENCE_SCORE, MIN_MODEL_AGREEMENT, MIN_MODELS_REQUIRED,
     MAX_FORECAST_DAYS, NEXT_DAY_EDGE_PENALTY,
+    TRADING_WINDOW_ENABLED, TRADING_WINDOW_START_HOUR, TRADING_WINDOW_END_HOUR,
+    OVERNIGHT_EDGE_PENALTY,
     calculate_kalshi_fee, get_confidence_level
 )
 from utils.logger import get_logger
 from utils.helpers import calculate_days_until, format_percent, format_currency
 from .probability import ensemble_probability, get_breakeven_temp
 from .ensemble import EnsembleModel
+import pytz
 
 logger = get_logger("edge_calculator")
+
+
+def is_in_trading_window() -> tuple[bool, str]:
+    """
+    Check if current time is within the optimal trading window.
+
+    Best trading hours: 6am-9pm Eastern
+    - Morning: Weather models have updated overnight, market hasn't adjusted
+    - Evening: Still okay but forecasts becoming stale
+    - Overnight (9pm-6am): Forecasts will change, require higher edge
+
+    Returns:
+        Tuple of (is_in_window, reason)
+    """
+    if not TRADING_WINDOW_ENABLED:
+        return True, "Trading window disabled"
+
+    try:
+        eastern = pytz.timezone('US/Eastern')
+        now_et = datetime.now(eastern)
+        hour = now_et.hour
+
+        if TRADING_WINDOW_START_HOUR <= hour < TRADING_WINDOW_END_HOUR:
+            return True, f"In trading window ({hour}:00 ET)"
+        else:
+            return False, f"Outside trading window ({hour}:00 ET, window is {TRADING_WINDOW_START_HOUR}-{TRADING_WINDOW_END_HOUR})"
+    except Exception as e:
+        logger.warning(f"Could not check trading window: {e}")
+        return True, "Could not determine timezone"
 
 
 @dataclass
@@ -313,6 +345,13 @@ class EdgeCalculator:
             adjusted_edge_threshold += NEXT_DAY_EDGE_PENALTY
             logger.debug(f"{ticker}: Next-day trade, edge threshold increased to {adjusted_edge_threshold:.0%}")
 
+        # TRADING WINDOW CHECK: Require higher edge outside optimal hours
+        # Overnight (9pm-6am ET): Forecasts will update before settlement
+        in_window, window_reason = is_in_trading_window()
+        if not in_window:
+            adjusted_edge_threshold += OVERNIGHT_EDGE_PENALTY
+            logger.info(f"{ticker}: {window_reason} - edge threshold increased to {adjusted_edge_threshold:.0%}")
+
         # Skip markets at extreme prices (can't calculate Kelly, minimal liquidity)
         if market_price <= 0.01 or market_price >= 0.99:
             logger.debug(f"Skipping {ticker}: price at extreme ({market_price:.2f})")
@@ -323,12 +362,13 @@ class EdgeCalculator:
         # For LOW markets: we want P(temp < threshold)
         direction = "above" if market_type == "high" else "below"
 
-        # Calculate ensemble probability
+        # Calculate ensemble probability with city-specific model weights
         prob_result = ensemble_probability(
             forecasts,
             temp_threshold,
             days_out,
-            direction
+            direction,
+            city=location  # Pass city for city-specific model weights
         )
 
         our_probability = prob_result["ensemble_prob"]

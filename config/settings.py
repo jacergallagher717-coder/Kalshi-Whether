@@ -51,6 +51,13 @@ MAX_FORECAST_DAYS = int(os.getenv("MAX_FORECAST_DAYS", "1"))  # Only trade same-
 NEXT_DAY_EDGE_PENALTY = float(os.getenv("NEXT_DAY_EDGE_PENALTY", "0.10"))  # Require 10% more edge for next-day
 PREFER_SAME_DAY = os.getenv("PREFER_SAME_DAY", "true").lower() == "true"  # Prioritize same-day markets
 
+# Morning Trading Window (times in Eastern)
+# Best time to trade: 6-9am ET when overnight model runs have settled but market hasn't adjusted
+TRADING_WINDOW_ENABLED = os.getenv("TRADING_WINDOW_ENABLED", "true").lower() == "true"
+TRADING_WINDOW_START_HOUR = int(os.getenv("TRADING_WINDOW_START_HOUR", "6"))  # 6am ET
+TRADING_WINDOW_END_HOUR = int(os.getenv("TRADING_WINDOW_END_HOUR", "21"))  # 9pm ET (allow evening trades)
+OVERNIGHT_EDGE_PENALTY = float(os.getenv("OVERNIGHT_EDGE_PENALTY", "0.15"))  # 15% more edge required 9pm-6am
+
 # Price Filters
 MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.10"))  # Don't buy YES below 10 cents (was 8)
 MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.45"))  # Don't buy NO above 45 cents
@@ -71,6 +78,21 @@ MODEL_WEIGHTS = {
     "nws": 0.20,             # Official forecast - what most people see
     "visualcrossing": 0.20   # Visual Crossing - commercial accuracy (reduced from 25%)
 }
+
+# City-Specific Model Weights (override defaults based on historical accuracy)
+# Format: city -> {model: weight}
+# These will be auto-updated by the model tracker as we gather data
+CITY_MODEL_WEIGHTS = {
+    # Starting with defaults - will be refined based on actual performance
+    "NYC": {"ecmwf": 0.40, "gfs": 0.20, "nws": 0.25, "visualcrossing": 0.15},
+    "CHI": {"ecmwf": 0.35, "gfs": 0.25, "nws": 0.20, "visualcrossing": 0.20},
+    "LA": {"ecmwf": 0.40, "gfs": 0.20, "nws": 0.20, "visualcrossing": 0.20},
+    "MIA": {"ecmwf": 0.40, "gfs": 0.20, "nws": 0.20, "visualcrossing": 0.20},
+    "AUS": {"ecmwf": 0.35, "gfs": 0.25, "nws": 0.20, "visualcrossing": 0.20},
+    "DEN": {"ecmwf": 0.35, "gfs": 0.25, "nws": 0.20, "visualcrossing": 0.20},
+    "PHI": {"ecmwf": 0.40, "gfs": 0.20, "nws": 0.25, "visualcrossing": 0.15},
+}
+USE_CITY_WEIGHTS = os.getenv("USE_CITY_WEIGHTS", "true").lower() == "true"
 
 # Temperature Probability Distribution
 # Standard deviation for temperature forecasts (in °F)
