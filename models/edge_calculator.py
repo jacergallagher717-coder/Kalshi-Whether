@@ -568,9 +568,10 @@ class EdgeCalculator:
                     logger.debug(f"Skipping {market.ticker}: spread {spread_pct:.0%} too wide (bid={market.yes_bid:.2f}, ask={market.yes_ask:.2f})")
                     return None
 
-        # VOLUME FILTER: Skip very low volume markets (optional, less strict)
-        if market.volume is not None and market.volume < 10:
-            logger.debug(f"Skipping {market.ticker}: volume {market.volume} too low")
+        # VOLUME FILTER: Skip zero volume markets only (relaxed)
+        # Weather markets often have low volume but still tradeable
+        if market.volume is not None and market.volume == 0:
+            logger.debug(f"Skipping {market.ticker}: zero volume")
             return None
 
         # Extract relevant forecast temps based on market type
