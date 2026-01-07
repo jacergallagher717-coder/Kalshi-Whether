@@ -598,7 +598,7 @@ def cmd_dashboard(args):
 
     # Recent fills/trades from paper trader
     system = TradingSystem()
-    recent_trades = system.paper_trader.get_trades(limit=10)
+    recent_trades = system.paper_trader.get_all_trades(limit=10)
 
     if recent_trades:
         print(f"\n📈 RECENT TRADES (last 10)")
