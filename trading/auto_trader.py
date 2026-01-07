@@ -11,6 +11,7 @@ This module handles:
 import time
 import signal
 import sys
+import re
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -30,6 +31,42 @@ from utils.logger import get_logger, setup_trade_logger
 
 logger = get_logger("auto_trader")
 trade_logger = setup_trade_logger()
+
+
+def parse_ticker_date(ticker: str) -> Optional[date]:
+    """
+    Parse the settlement date from a ticker.
+
+    Format: KXHIGHDEN-26JAN05-T58 -> January 5, 2026
+
+    Args:
+        ticker: Market ticker string
+
+    Returns:
+        date object or None if parsing fails
+    """
+    try:
+        # Match pattern like 26JAN05 (YY + MON + DD)
+        match = re.search(r'-(\d{2})([A-Z]{3})(\d{2})-', ticker)
+        if not match:
+            return None
+
+        year = int(match.group(1)) + 2000  # 26 -> 2026
+        month_str = match.group(2)
+        day = int(match.group(3))
+
+        months = {
+            'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4,
+            'MAY': 5, 'JUN': 6, 'JUL': 7, 'AUG': 8,
+            'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
+        }
+        month = months.get(month_str)
+        if not month:
+            return None
+
+        return date(year, month, day)
+    except Exception:
+        return None
 
 
 @dataclass
@@ -267,9 +304,21 @@ class AutoTrader:
             List of tickers that were exited
         """
         exited = []
+        expired = []
         positions = self.paper_trader.get_open_positions()
+        today = date.today()
 
         for position in positions:
+            # Check if market has expired (settlement date is in the past)
+            settlement_date = parse_ticker_date(position.ticker)
+            if settlement_date and settlement_date < today:
+                # Market has already settled - just close paper position, don't try to trade
+                logger.info(f"Skipping expired market {position.ticker} (settled {settlement_date})")
+                expired.append(position.ticker)
+                # Mark paper position as closed (settled by Kalshi)
+                self.paper_trader.close_position(position.id, "expired")
+                continue
+
             should_exit, reason = self._should_exit(position)
 
             if should_exit:
@@ -279,6 +328,9 @@ class AutoTrader:
                     self._execute_exit(position)
 
                 exited.append(position.ticker)
+
+        if expired:
+            logger.info(f"Cleaned up {len(expired)} expired paper positions")
 
         return exited
 

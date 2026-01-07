@@ -449,6 +449,40 @@ class PaperTrader:
 
         logger.info(f"Cancelled trade {trade_id}: {reason}")
 
+    def close_position(self, trade_id: str, reason: str = "expired"):
+        """
+        Close an open position for expired markets.
+
+        Used when markets have already settled on Kalshi but we don't have
+        the actual temperature data. Marks as EXPIRED to clean up.
+
+        Args:
+            trade_id: Trade ID to close
+            reason: Reason for closing (default: "expired")
+        """
+        trade = self.get_trade(trade_id)
+        if not trade:
+            logger.warning(f"Trade not found for close: {trade_id}")
+            return
+
+        if trade.status != "OPEN":
+            return  # Already closed
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            UPDATE paper_trades SET
+                status = 'EXPIRED',
+                settled_at = ?
+            WHERE id = ?
+        ''', (datetime.utcnow().isoformat(), trade_id))
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Closed expired position {trade_id} ({trade.ticker}): {reason}")
+
     def _row_to_trade(self, row) -> PaperTrade:
         """Convert database row to PaperTrade object."""
         if not row:
