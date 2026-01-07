@@ -34,16 +34,17 @@ AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "
 # Trading Parameters - BALANCED (based on Jan 5-6 trade analysis)
 # Philly won big with ~40% edge, but we don't want to miss good opportunities
 MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.30"))  # 30% minimum edge
+MIN_PROBABILITY_THRESHOLD = float(os.getenv("MIN_PROBABILITY_THRESHOLD", "0.20"))  # 20% min probability (skip long-shots)
 MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.50"))  # 50% confidence required
 MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.65"))  # 65% model agreement
-MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "150"))  # Max $1.50 per trade (default)
-MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "20"))  # Conservative: max 20 contracts
+MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "225"))  # Max $2.25 per trade (1.5x increase)
+MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "30"))  # Max 30 contracts (1.5x increase)
 
 # Aggressive Sizing for High-Edge Trades
 # When edge is 50%+, we're very confident - size up
 HIGH_EDGE_THRESHOLD = float(os.getenv("HIGH_EDGE_THRESHOLD", "0.50"))  # 50%+ edge = high conviction
-HIGH_EDGE_POSITION_PERCENT = float(os.getenv("HIGH_EDGE_POSITION_PERCENT", "0.05"))  # 5% of bankroll for 50%+ edge
-NORMAL_POSITION_PERCENT = float(os.getenv("NORMAL_POSITION_PERCENT", "0.02"))  # 2% of bankroll for normal trades
+HIGH_EDGE_POSITION_PERCENT = float(os.getenv("HIGH_EDGE_POSITION_PERCENT", "0.075"))  # 7.5% of bankroll for 50%+ edge (1.5x)
+NORMAL_POSITION_PERCENT = float(os.getenv("NORMAL_POSITION_PERCENT", "0.03"))  # 3% of bankroll for normal trades (1.5x)
 
 # Time-based Trading Filters (forecast accuracy decays with time)
 # Forecasts update overnight - trading tomorrow's weather at midnight is risky

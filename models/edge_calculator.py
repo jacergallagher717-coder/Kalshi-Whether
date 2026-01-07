@@ -12,7 +12,7 @@ from typing import Dict, Optional, List
 import uuid
 
 from config.settings import (
-    MIN_EDGE_THRESHOLD, MAX_POSITION_SIZE, MAX_CONTRACTS_PER_TRADE,
+    MIN_EDGE_THRESHOLD, MIN_PROBABILITY_THRESHOLD, MAX_POSITION_SIZE, MAX_CONTRACTS_PER_TRADE,
     MIN_YES_PRICE, MAX_NO_PRICE_BRACKET, BRACKET_POSITION_SCALE,
     MAX_MODEL_SPREAD, MIN_CONFIDENCE_SCORE, MIN_MODEL_AGREEMENT, MIN_MODELS_REQUIRED,
     MAX_FORECAST_DAYS, NEXT_DAY_EDGE_PENALTY,
@@ -406,6 +406,13 @@ class EdgeCalculator:
         # For BUY_YES: edge = our_prob - market_prob (positive means we like YES)
         # For BUY_NO: edge = market_prob - our_prob (positive means we like NO)
         edge = abs(raw_edge)
+
+        # PROBABILITY FILTER: Skip low-probability bets (long-shots lose too often)
+        # Check the probability of the direction we're actually betting on
+        betting_probability = our_probability if trade_direction == "BUY_YES" else (1 - our_probability)
+        if betting_probability < MIN_PROBABILITY_THRESHOLD:
+            logger.debug(f"Skipping {ticker}: betting probability {betting_probability:.0%} below {MIN_PROBABILITY_THRESHOLD:.0%} threshold (avoiding long-shots)")
+            return None
 
         # Calculate EV
         expected_value = self.calculate_expected_value(
