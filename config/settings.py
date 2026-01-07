@@ -36,8 +36,14 @@ AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "
 MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.30"))  # 30% minimum edge
 MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.50"))  # 50% confidence required
 MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.65"))  # 65% model agreement
-MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "150"))  # Max $1.50 per trade
+MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "150"))  # Max $1.50 per trade (default)
 MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "20"))  # Conservative: max 20 contracts
+
+# Aggressive Sizing for High-Edge Trades
+# When edge is 50%+, we're very confident - size up
+HIGH_EDGE_THRESHOLD = float(os.getenv("HIGH_EDGE_THRESHOLD", "0.50"))  # 50%+ edge = high conviction
+HIGH_EDGE_POSITION_PERCENT = float(os.getenv("HIGH_EDGE_POSITION_PERCENT", "0.05"))  # 5% of bankroll for 50%+ edge
+NORMAL_POSITION_PERCENT = float(os.getenv("NORMAL_POSITION_PERCENT", "0.02"))  # 2% of bankroll for normal trades
 
 # Time-based Trading Filters (forecast accuracy decays with time)
 # Forecasts update overnight - trading tomorrow's weather at midnight is risky

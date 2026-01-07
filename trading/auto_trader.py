@@ -20,7 +20,8 @@ from config.settings import (
     AUTO_TRADE_ENABLED, AUTO_TRADE_MAX_DAILY_TRADES,
     AUTO_TRADE_MAX_OPEN_POSITIONS, KALSHI_USE_DEMO,
     TRADING_CHECK_INTERVAL_MINUTES, MIN_EDGE_THRESHOLD,
-    KALSHI_DEMO_URL
+    KALSHI_DEMO_URL, HIGH_EDGE_THRESHOLD, HIGH_EDGE_POSITION_PERCENT,
+    NORMAL_POSITION_PERCENT, MAX_CONTRACTS_PER_TRADE
 )
 from data.collectors.kalshi_client import KalshiClient, Order, Position
 from data.collectors.data_manager import DataManager
@@ -150,6 +151,49 @@ class AutoTrader:
             self.daily_reset_date = date.today()
             logger.info("Daily counters reset")
 
+    def _calculate_position_size(self, signal: TradeSignal, balance: float) -> int:
+        """
+        Calculate dynamic position size based on edge and bankroll.
+
+        High-edge trades (50%+) get 5% of bankroll.
+        Normal trades get 2% of bankroll.
+
+        Args:
+            signal: Trade signal with edge info
+            balance: Current account balance
+
+        Returns:
+            Number of contracts to trade
+        """
+        # Determine position percentage based on edge
+        if signal.edge >= HIGH_EDGE_THRESHOLD:
+            position_pct = HIGH_EDGE_POSITION_PERCENT  # 5% for high edge
+            logger.info(f"HIGH EDGE ({signal.edge:.1%}) - using {position_pct:.0%} of bankroll")
+        else:
+            position_pct = NORMAL_POSITION_PERCENT  # 2% for normal
+
+        # Calculate dollar amount
+        position_dollars = balance * position_pct
+
+        # Calculate entry price
+        if signal.direction == "BUY_YES":
+            entry_price = signal.market_price
+        else:
+            entry_price = 1.0 - signal.market_price
+
+        # Convert to contracts
+        if entry_price > 0:
+            contracts = int(position_dollars / entry_price)
+        else:
+            contracts = 1
+
+        # Apply caps
+        contracts = max(1, min(contracts, MAX_CONTRACTS_PER_TRADE))
+
+        logger.debug(f"Position sizing: ${balance:.2f} * {position_pct:.0%} = ${position_dollars:.2f} -> {contracts} contracts @ ${entry_price:.2f}")
+
+        return contracts
+
     def _can_trade(self) -> tuple[bool, str]:
         """
         Check if we can execute a new trade.
@@ -255,6 +299,19 @@ class AutoTrader:
             if existing:
                 logger.info(f"Already have paper position in {ticker}, skipping")
                 return False
+
+        # DYNAMIC POSITION SIZING based on bankroll and edge
+        if self.live_trading:
+            try:
+                balance_info = self.trading_client.get_balance()
+                if balance_info:
+                    balance = balance_info.get('available_balance', 100)
+                    # Calculate dynamic contracts based on edge and bankroll
+                    dynamic_contracts = self._calculate_position_size(signal, balance)
+                    signal.recommended_contracts = dynamic_contracts
+                    logger.info(f"Dynamic sizing: ${balance:.2f} balance -> {dynamic_contracts} contracts")
+            except Exception as e:
+                logger.warning(f"Could not get balance for dynamic sizing: {e}")
 
         # Log the trade attempt
         trade_logger.info(

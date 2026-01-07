@@ -549,6 +549,92 @@ def cmd_execute(args):
             print("Paper trade failed (may already have position)")
 
 
+def cmd_dashboard(args):
+    """Show real-time P&L dashboard with Kalshi data."""
+    from data.collectors.kalshi_client import KalshiClient
+    from analysis.model_tracker import ModelTracker
+
+    print("\n" + "="*60)
+    print("WEATHER TRADING DASHBOARD")
+    print("="*60)
+
+    client = KalshiClient()
+
+    if not client.login():
+        print("Login failed! Check credentials.")
+        return
+
+    # Account Balance
+    balance = client.get_balance()
+    if balance:
+        print(f"\n💰 ACCOUNT BALANCE")
+        print(f"   Total:     ${balance['balance']:.2f}")
+        print(f"   Available: ${balance['available_balance']:.2f}")
+        print(f"   At Risk:   ${balance['balance'] - balance['available_balance']:.2f}")
+
+    # Open Positions
+    positions = client.get_positions()
+    if positions:
+        print(f"\n📊 OPEN POSITIONS ({len(positions)})")
+        print("-" * 50)
+
+        total_exposure = 0
+        for pos in positions:
+            direction = "YES" if pos.market_exposure > 0 else "NO"
+            exposure = abs(pos.market_exposure)
+            total_exposure += exposure
+
+            # Extract city from ticker
+            ticker_parts = pos.ticker.split('-')
+            city = ticker_parts[0].replace('KXHIGH', '').replace('KXLOW', '')
+
+            print(f"   {pos.ticker}")
+            print(f"      {direction} x{exposure} contracts | City: {city}")
+
+        print("-" * 50)
+        print(f"   Total Exposure: {total_exposure} contracts")
+    else:
+        print("\n📊 No open positions")
+
+    # Recent fills/trades from paper trader
+    system = TradingSystem()
+    recent_trades = system.paper_trader.get_trades(limit=10)
+
+    if recent_trades:
+        print(f"\n📈 RECENT TRADES (last 10)")
+        print("-" * 50)
+
+        wins = 0
+        losses = 0
+        total_pnl = 0
+
+        for trade in recent_trades:
+            if trade.status == 'SETTLED':
+                result = "WIN" if trade.net_pnl > 0 else "LOSS"
+                pnl_str = f"${trade.net_pnl:+.2f}"
+                if trade.net_pnl > 0:
+                    wins += 1
+                else:
+                    losses += 1
+                total_pnl += trade.net_pnl
+                print(f"   [{result}] {trade.ticker} | {pnl_str}")
+            else:
+                print(f"   [OPEN] {trade.ticker} | Edge: {trade.edge_at_entry:.1%}")
+
+        if wins + losses > 0:
+            win_rate = wins / (wins + losses)
+            print("-" * 50)
+            print(f"   Win Rate: {win_rate:.0%} ({wins}W / {losses}L)")
+            print(f"   Total P&L: ${total_pnl:+.2f}")
+
+    # Model Accuracy Report
+    if args.models:
+        tracker = ModelTracker()
+        print("\n" + tracker.generate_report())
+
+    print("\n" + "="*60)
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -629,6 +715,11 @@ Examples:
     analyze_parser = subparsers.add_parser("analyze", help="Analyze specific market")
     analyze_parser.add_argument("ticker", help="Market ticker (e.g., KXHIGHNY-25DEC18-T50)")
     analyze_parser.set_defaults(func=cmd_analyze_market)
+
+    # Dashboard command
+    dashboard_parser = subparsers.add_parser("dashboard", help="Show real-time P&L dashboard")
+    dashboard_parser.add_argument("--models", action="store_true", help="Include model accuracy report")
+    dashboard_parser.set_defaults(func=cmd_dashboard)
 
     args = parser.parse_args()
 
