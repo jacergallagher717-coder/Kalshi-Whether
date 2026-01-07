@@ -15,6 +15,7 @@ from config.settings import (
     MIN_EDGE_THRESHOLD, MAX_POSITION_SIZE, MAX_CONTRACTS_PER_TRADE,
     MIN_YES_PRICE, MAX_NO_PRICE_BRACKET, BRACKET_POSITION_SCALE,
     MAX_MODEL_SPREAD, MIN_CONFIDENCE_SCORE, MIN_MODEL_AGREEMENT, MIN_MODELS_REQUIRED,
+    MAX_FORECAST_DAYS, NEXT_DAY_EDGE_PENALTY,
     calculate_kalshi_fee, get_confidence_level
 )
 from utils.logger import get_logger
@@ -293,13 +294,24 @@ class EdgeCalculator:
         """
         days_out = calculate_days_until(target_date, allow_negative=True)
 
-        # Skip if market already expired or too far out
+        # Skip if market already expired
         if days_out < 0:
             logger.debug(f"Skipping {ticker}: already expired")
             return None
-        if days_out > 7:
-            logger.debug(f"Skipping {ticker}: too far out ({days_out} days)")
+
+        # TIME-BASED FILTER: Only trade within forecast accuracy window
+        # Forecasts update overnight - trading 2+ days out is unreliable
+        if days_out > MAX_FORECAST_DAYS:
+            logger.debug(f"Skipping {ticker}: {days_out} days out exceeds max {MAX_FORECAST_DAYS} (forecast accuracy)")
             return None
+
+        # Calculate adjusted edge threshold based on time
+        # Same-day (days_out=0): Use base threshold - forecasts are accurate
+        # Next-day (days_out=1): Add penalty - forecasts may change overnight
+        adjusted_edge_threshold = MIN_EDGE_THRESHOLD
+        if days_out > 0:
+            adjusted_edge_threshold += NEXT_DAY_EDGE_PENALTY
+            logger.debug(f"{ticker}: Next-day trade, edge threshold increased to {adjusted_edge_threshold:.0%}")
 
         # Skip markets at extreme prices (can't calculate Kelly, minimal liquidity)
         if market_price <= 0.01 or market_price >= 0.99:
@@ -360,9 +372,9 @@ class EdgeCalculator:
             our_probability, market_price, trade_direction
         )
 
-        # CONVICTION FILTER 3: Skip if edge below threshold
-        if edge < MIN_EDGE_THRESHOLD:
-            logger.debug(f"Skipping {ticker}: edge {edge:.2%} below threshold {MIN_EDGE_THRESHOLD:.0%}")
+        # CONVICTION FILTER 3: Skip if edge below threshold (adjusted for forecast timing)
+        if edge < adjusted_edge_threshold:
+            logger.debug(f"Skipping {ticker}: edge {edge:.2%} below threshold {adjusted_edge_threshold:.0%} (days_out={days_out})")
             return None
 
         # CONVICTION FILTER 4: Skip if confidence score too low

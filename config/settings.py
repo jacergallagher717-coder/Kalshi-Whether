@@ -39,6 +39,12 @@ MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.65"))  # 65% mod
 MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "150"))  # Max $1.50 per trade
 MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "20"))  # Conservative: max 20 contracts
 
+# Time-based Trading Filters (forecast accuracy decays with time)
+# Forecasts update overnight - trading tomorrow's weather at midnight is risky
+MAX_FORECAST_DAYS = int(os.getenv("MAX_FORECAST_DAYS", "1"))  # Only trade same-day (0) and next-day (1)
+NEXT_DAY_EDGE_PENALTY = float(os.getenv("NEXT_DAY_EDGE_PENALTY", "0.10"))  # Require 10% more edge for next-day
+PREFER_SAME_DAY = os.getenv("PREFER_SAME_DAY", "true").lower() == "true"  # Prioritize same-day markets
+
 # Price Filters
 MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.10"))  # Don't buy YES below 10 cents (was 8)
 MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.45"))  # Don't buy NO above 45 cents
