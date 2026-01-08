@@ -150,13 +150,10 @@ class WeatherClient:
             List of Forecast objects, one per model per day
         """
         location = get_location(location_key)
-        # Expanded model list for better ensemble (Apple Weather uses similar sources)
+        # Core models - proven accuracy for US weather
         models = models or [
-            "gfs_seamless",      # US - NOAA
-            "ecmwf_ifs04",       # Europe - ECMWF (separate endpoint)
-            "icon_seamless",     # Germany - DWD
-            "gem_seamless",      # Canada
-            "meteofrance_seamless",  # France - Météo-France
+            "gfs_seamless",      # US - NOAA (primary US model)
+            "ecmwf_ifs04",       # Europe - ECMWF (most accurate globally)
         ]
 
         forecasts = []
@@ -200,10 +197,6 @@ class WeatherClient:
             model_name_map = {
                 "gfs_seamless": "gfs",
                 "ecmwf_ifs04": "ecmwf",
-                "icon_seamless": "icon",        # German DWD
-                "gem_seamless": "gem",          # Environment Canada
-                "meteofrance_seamless": "meteofrance",  # Météo-France
-                "ukmo_seamless": "ukmo",        # UK Met Office
             }
             source = model_name_map.get(model, model)
 
@@ -390,12 +383,9 @@ class WeatherClient:
         """
         all_forecasts = {
             "gfs": [],           # US - NOAA
-            "ecmwf": [],         # Europe - ECMWF
-            "icon": [],          # Germany - DWD
-            "gem": [],           # Canada
-            "meteofrance": [],   # France
-            "nws": [],           # US - NWS (official)
-            "visualcrossing": [] # Commercial
+            "ecmwf": [],         # Europe - ECMWF (most accurate)
+            "nws": [],           # US - NWS (official, likely used for settlement)
+            "visualcrossing": [] # Commercial blend
         }
 
         # Get Open-Meteo forecasts (GFS and ECMWF)
