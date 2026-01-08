@@ -72,26 +72,35 @@ CONFIDENCE_LEVELS = {
     "low": 0.05                # 5-10% edge = low confidence (no trade)
 }
 
-# Model Weights for Ensemble (adjusted based on accuracy analysis)
+# Model Weights for Ensemble (expanded with more sources for better accuracy)
+# Sources: Apple Weather uses similar providers (ECMWF, DWD, Environment Canada, etc.)
 MODEL_WEIGHTS = {
-    "ecmwf": 0.40,           # European model - most accurate (increased from 30%)
-    "gfs": 0.20,             # American model - good for short term (reduced from 25%)
-    "nws": 0.20,             # Official forecast - what most people see
-    "visualcrossing": 0.20   # Visual Crossing - commercial accuracy (reduced from 25%)
+    "ecmwf": 0.25,           # European Centre - most accurate globally
+    "gfs": 0.15,             # US NOAA - good for North America short term
+    "icon": 0.15,            # German DWD - excellent for mid-range forecasts
+    "gem": 0.10,             # Environment Canada - good for continental weather
+    "meteofrance": 0.10,     # Météo-France - good for complex weather patterns
+    "nws": 0.15,             # Official US forecast - what Kalshi likely uses for settlement
+    "visualcrossing": 0.10   # Visual Crossing - commercial blend
 }
 
 # City-Specific Model Weights (override defaults based on historical accuracy)
 # Format: city -> {model: weight}
 # These will be auto-updated by the model tracker as we gather data
 CITY_MODEL_WEIGHTS = {
-    # Starting with defaults - will be refined based on actual performance
-    "NYC": {"ecmwf": 0.40, "gfs": 0.20, "nws": 0.25, "visualcrossing": 0.15},
-    "CHI": {"ecmwf": 0.35, "gfs": 0.25, "nws": 0.20, "visualcrossing": 0.20},
-    "LA": {"ecmwf": 0.40, "gfs": 0.20, "nws": 0.20, "visualcrossing": 0.20},
-    "MIA": {"ecmwf": 0.40, "gfs": 0.20, "nws": 0.20, "visualcrossing": 0.20},
-    "AUS": {"ecmwf": 0.35, "gfs": 0.25, "nws": 0.20, "visualcrossing": 0.20},
-    "DEN": {"ecmwf": 0.35, "gfs": 0.25, "nws": 0.20, "visualcrossing": 0.20},
-    "PHI": {"ecmwf": 0.40, "gfs": 0.20, "nws": 0.25, "visualcrossing": 0.15},
+    # US East Coast - ECMWF and NWS are strong
+    "NYC": {"ecmwf": 0.25, "gfs": 0.15, "icon": 0.15, "gem": 0.10, "meteofrance": 0.05, "nws": 0.20, "visualcrossing": 0.10},
+    "PHI": {"ecmwf": 0.25, "gfs": 0.15, "icon": 0.15, "gem": 0.10, "meteofrance": 0.05, "nws": 0.20, "visualcrossing": 0.10},
+    # US Midwest - GFS performs better here
+    "CHI": {"ecmwf": 0.20, "gfs": 0.20, "icon": 0.15, "gem": 0.15, "meteofrance": 0.05, "nws": 0.15, "visualcrossing": 0.10},
+    # US West Coast - Marine influence, ECMWF strong
+    "LA": {"ecmwf": 0.25, "gfs": 0.15, "icon": 0.15, "gem": 0.10, "meteofrance": 0.10, "nws": 0.15, "visualcrossing": 0.10},
+    # Florida - Tropical, ECMWF strong
+    "MIA": {"ecmwf": 0.25, "gfs": 0.15, "icon": 0.15, "gem": 0.10, "meteofrance": 0.10, "nws": 0.15, "visualcrossing": 0.10},
+    # Texas - Continental, GFS and ICON good
+    "AUS": {"ecmwf": 0.20, "gfs": 0.20, "icon": 0.15, "gem": 0.10, "meteofrance": 0.05, "nws": 0.20, "visualcrossing": 0.10},
+    # Colorado - Mountain weather, diverse ensemble helps
+    "DEN": {"ecmwf": 0.20, "gfs": 0.20, "icon": 0.15, "gem": 0.15, "meteofrance": 0.05, "nws": 0.15, "visualcrossing": 0.10},
 }
 USE_CITY_WEIGHTS = os.getenv("USE_CITY_WEIGHTS", "true").lower() == "true"
 

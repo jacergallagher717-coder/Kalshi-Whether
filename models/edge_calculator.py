@@ -357,19 +357,28 @@ class EdgeCalculator:
             logger.debug(f"Skipping {ticker}: price at extreme ({market_price:.2f})")
             return None
 
+        # Check if this is a bracket market (ticker contains 'B' followed by digits after date)
+        is_bracket = '-B' in ticker
+
         # Determine direction for probability calculation
         # For HIGH markets: we want P(temp > threshold)
         # For LOW markets: we want P(temp < threshold)
         direction = "above" if market_type == "high" else "below"
 
         # Calculate ensemble probability with city-specific model weights
+        # For bracket markets, we calculate P(lower ≤ T < upper) instead of P(T > threshold)
         prob_result = ensemble_probability(
             forecasts,
             temp_threshold,
             days_out,
             direction,
-            city=location  # Pass city for city-specific model weights
+            city=location,  # Pass city for city-specific model weights
+            is_bracket=is_bracket,
+            market_type=market_type
         )
+
+        if is_bracket:
+            logger.debug(f"{ticker}: Bracket market - calculating P({temp_threshold-0.5}≤T<{temp_threshold+0.5})")
 
         our_probability = prob_result["ensemble_prob"]
         model_probs = prob_result["model_probs"]
@@ -433,9 +442,6 @@ class EdgeCalculator:
         if expected_value < 0:
             logger.debug(f"Skipping {ticker}: negative EV after fees")
             return None
-
-        # Check if this is a bracket market (ticker contains 'B' followed by digits after date)
-        is_bracket = '-B' in ticker
 
         # Price filters based on Jan 2 analysis
         if trade_direction == "BUY_YES":

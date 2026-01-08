@@ -48,6 +48,16 @@ def get_model_weights_for_city(city: str = None) -> Dict[str, float]:
     return MODEL_WEIGHTS
 
 
+def get_uncertainty_for_days(days_out: int) -> float:
+    """Get the temperature uncertainty (std dev) for a given forecast horizon."""
+    if days_out < 0:
+        return TEMP_UNCERTAINTY[0]  # Use same-day for past dates
+    elif days_out > 7:
+        return TEMP_UNCERTAINTY[7]  # Cap at 7-day uncertainty
+    else:
+        return TEMP_UNCERTAINTY.get(days_out, TEMP_UNCERTAINTY[1])
+
+
 def forecast_to_probability(
     forecast_temp: float,
     threshold: float,
@@ -73,14 +83,7 @@ def forecast_to_probability(
         >>> forecast_to_probability(85.0, 82.0, 1, "above")
         0.933  # ~93% chance temp > 82 when forecast is 85 with 2°F std dev
     """
-    # Get uncertainty for this forecast horizon
-    # Same-day (0) has tightest uncertainty, increases with days out
-    if days_out < 0:
-        std_dev = TEMP_UNCERTAINTY[0]  # Use same-day for past dates (shouldn't happen)
-    elif days_out > 7:
-        std_dev = TEMP_UNCERTAINTY[7]  # Cap at 7-day uncertainty
-    else:
-        std_dev = TEMP_UNCERTAINTY.get(days_out, TEMP_UNCERTAINTY[1])
+    std_dev = get_uncertainty_for_days(days_out)
 
     # Create normal distribution centered on forecast
     dist = stats.norm(loc=forecast_temp, scale=std_dev)
@@ -96,13 +99,55 @@ def forecast_to_probability(
     return max(0.001, min(0.999, prob))
 
 
+def forecast_to_bracket_probability(
+    forecast_temp: float,
+    bracket_midpoint: float,
+    days_out: int,
+    market_type: str = "high"
+) -> float:
+    """
+    Convert a temperature forecast to probability of landing in a bracket.
+
+    A bracket market like B78.5 represents the range 78-79°F.
+    P(78 ≤ T < 79) = P(T > 78) - P(T > 79) for high temp markets.
+
+    Args:
+        forecast_temp: Forecasted temperature in °F
+        bracket_midpoint: Midpoint of bracket (e.g., 78.5 for 78-79 range)
+        days_out: Days until settlement
+        market_type: "high" or "low" - affects which direction we calculate
+
+    Returns:
+        Probability of landing in the bracket (0-1)
+
+    Example:
+        For Austin with forecast 80°F and bracket 78-79°F:
+        >>> forecast_to_bracket_probability(80.0, 78.5, 0, "high")
+        0.11  # ~11% chance high temp lands in 78-79 range when forecasted at 80
+    """
+    # Bracket bounds: midpoint ± 0.5
+    lower_bound = bracket_midpoint - 0.5  # e.g., 78.0
+    upper_bound = bracket_midpoint + 0.5  # e.g., 79.0
+
+    std_dev = get_uncertainty_for_days(days_out)
+    dist = stats.norm(loc=forecast_temp, scale=std_dev)
+
+    # P(lower ≤ T < upper) = CDF(upper) - CDF(lower)
+    prob = dist.cdf(upper_bound) - dist.cdf(lower_bound)
+
+    # Ensure probability is in valid range
+    return max(0.001, min(0.999, prob))
+
+
 def ensemble_probability(
     forecasts: Dict[str, float],
     threshold: float,
     days_out: int,
     direction: str = "above",
     weights: Dict[str, float] = None,
-    city: str = None
+    city: str = None,
+    is_bracket: bool = False,
+    market_type: str = "high"
 ) -> Dict[str, any]:
     """
     Combine multiple forecast sources into ensemble probability.
@@ -112,11 +157,13 @@ def ensemble_probability(
 
     Args:
         forecasts: Dict mapping source to forecast temp {"ecmwf": 85.0, "gfs": 84.0}
-        threshold: Temperature threshold for the market
+        threshold: Temperature threshold for the market (or midpoint for brackets)
         days_out: Days until settlement
-        direction: "above" or "below"
+        direction: "above" or "below" (ignored for bracket markets)
         weights: Optional custom weights. Defaults to MODEL_WEIGHTS.
         city: Optional city code for city-specific model weights.
+        is_bracket: True if this is a bracket/range market (e.g., 78-79°F)
+        market_type: "high" or "low" - used for bracket markets
 
     Returns:
         Dictionary with:
@@ -140,7 +187,12 @@ def ensemble_probability(
 
     for source, temp in forecasts.items():
         if temp is not None:
-            prob = forecast_to_probability(temp, threshold, days_out, direction)
+            if is_bracket:
+                # For bracket markets, calculate P(lower ≤ T < upper)
+                prob = forecast_to_bracket_probability(temp, threshold, days_out, market_type)
+            else:
+                # For threshold markets, calculate P(T > threshold) or P(T < threshold)
+                prob = forecast_to_probability(temp, threshold, days_out, direction)
             model_probs[source] = prob
             valid_forecasts[source] = temp
 

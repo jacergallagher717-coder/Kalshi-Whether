@@ -138,14 +138,26 @@ class WeatherClient:
 
         Args:
             location_key: Location identifier (e.g., "NYC")
-            models: List of models to fetch. Options: "gfs_seamless", "ecmwf_ifs04"
-                   Defaults to both GFS and ECMWF.
+            models: List of models to fetch. Available models:
+                   - "gfs_seamless": US Global Forecast System (NOAA)
+                   - "ecmwf_ifs04": European Centre (ECMWF) - requires separate endpoint
+                   - "icon_seamless": German Weather Service (DWD)
+                   - "gem_seamless": Environment Canada
+                   - "meteofrance_seamless": Météo-France (ARPEGE/AROME)
+                   - "ukmo_seamless": UK Met Office
 
         Returns:
             List of Forecast objects, one per model per day
         """
         location = get_location(location_key)
-        models = models or ["gfs_seamless", "ecmwf_ifs04"]
+        # Expanded model list for better ensemble (Apple Weather uses similar sources)
+        models = models or [
+            "gfs_seamless",      # US - NOAA
+            "ecmwf_ifs04",       # Europe - ECMWF (separate endpoint)
+            "icon_seamless",     # Germany - DWD
+            "gem_seamless",      # Canada
+            "meteofrance_seamless",  # France - Météo-France
+        ]
 
         forecasts = []
 
@@ -187,7 +199,11 @@ class WeatherClient:
             # Map model name to our internal names
             model_name_map = {
                 "gfs_seamless": "gfs",
-                "ecmwf_ifs04": "ecmwf"
+                "ecmwf_ifs04": "ecmwf",
+                "icon_seamless": "icon",        # German DWD
+                "gem_seamless": "gem",          # Environment Canada
+                "meteofrance_seamless": "meteofrance",  # Météo-France
+                "ukmo_seamless": "ukmo",        # UK Met Office
             }
             source = model_name_map.get(model, model)
 
@@ -373,10 +389,13 @@ class WeatherClient:
             Dictionary mapping source names to lists of Forecasts
         """
         all_forecasts = {
-            "gfs": [],
-            "ecmwf": [],
-            "nws": [],
-            "visualcrossing": []
+            "gfs": [],           # US - NOAA
+            "ecmwf": [],         # Europe - ECMWF
+            "icon": [],          # Germany - DWD
+            "gem": [],           # Canada
+            "meteofrance": [],   # France
+            "nws": [],           # US - NWS (official)
+            "visualcrossing": [] # Commercial
         }
 
         # Get Open-Meteo forecasts (GFS and ECMWF)
