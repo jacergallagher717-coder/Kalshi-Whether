@@ -40,6 +40,7 @@ from analysis.performance import PerformanceAnalyzer
 from analysis.edge_validation import EdgeValidator
 from analysis.reports import ReportGenerator
 from analysis.backtest import Backtester
+from analysis.pattern_analyzer import PatternAnalyzer
 from utils.logger import setup_logger, get_logger
 from utils.helpers import format_currency, format_percent
 
@@ -591,6 +592,18 @@ def cmd_backtest(args):
             print("Run the bot in auto mode to generate trades first.")
 
 
+def cmd_patterns(args):
+    """Analyze patterns in winners vs losers."""
+    analyzer = PatternAnalyzer()
+
+    print(analyzer.generate_report())
+
+    # Show recommendations prominently
+    recs = analyzer.get_recommendations()
+    if recs and not args.brief:
+        print("\n💡 To implement these recommendations, adjust settings in config/settings.py")
+
+
 def cmd_dashboard(args):
     """Show real-time P&L dashboard with Kalshi data."""
     from data.collectors.kalshi_client import KalshiClient
@@ -783,6 +796,11 @@ Examples:
     backtest_parser.add_argument("--optimize", action="store_true", help="Find optimal edge threshold")
     backtest_parser.add_argument("--compare", action="store_true", help="Compare different strategies")
     backtest_parser.set_defaults(func=cmd_backtest)
+
+    # Patterns command (NEW) - Analyze winners vs losers
+    patterns_parser = subparsers.add_parser("patterns", help="Analyze patterns in winners vs losers")
+    patterns_parser.add_argument("--brief", action="store_true", help="Show brief output only")
+    patterns_parser.set_defaults(func=cmd_patterns)
 
     args = parser.parse_args()
 
