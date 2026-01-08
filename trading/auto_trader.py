@@ -280,15 +280,32 @@ class AutoTrader:
             return False
 
         # SAFEGUARD 2: Check if we already have a position in this market
+        # SAFEGUARD 3: Check if we already have ANY position for this city/day (no multi-bracket)
         if self.live_trading:
             # Check real Kalshi positions when live trading
             try:
                 kalshi_positions = self.trading_client.get_positions()
+
+                # Extract city and date from ticker (e.g., KXHIGHDEN-26JAN08-B40 -> DEN, 26JAN08)
+                ticker_parts = ticker.split('-')
+                if len(ticker_parts) >= 2:
+                    ticker_city = ticker_parts[0]  # KXHIGHDEN
+                    ticker_date = ticker_parts[1]  # 26JAN08
+                    city_date_prefix = f"{ticker_city}-{ticker_date}"
+                else:
+                    city_date_prefix = ticker
+
                 for pos in kalshi_positions:
                     # Use market_exposure (not count) - position exists if exposure > 0
-                    if pos.ticker == ticker and pos.market_exposure != 0:
-                        logger.info(f"Already have REAL position in {ticker} (exposure: {pos.market_exposure}), skipping")
-                        return False
+                    if pos.market_exposure != 0:
+                        # Check exact ticker match
+                        if pos.ticker == ticker:
+                            logger.info(f"Already have REAL position in {ticker} (exposure: {pos.market_exposure}), skipping")
+                            return False
+                        # Check same city/day (prevents multiple bracket bets)
+                        if pos.ticker.startswith(city_date_prefix):
+                            logger.info(f"SAFEGUARD: Already have position in {pos.ticker} for same city/day, skipping {ticker}")
+                            return False
             except Exception as e:
                 # FAIL SAFE: If we can't check positions, DON'T TRADE
                 logger.error(f"SAFEGUARD: Could not verify positions, refusing to trade: {e}")
