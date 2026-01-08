@@ -58,6 +58,52 @@ def is_in_trading_window() -> tuple[bool, str]:
         return True, "Could not determine timezone"
 
 
+def is_post_model_update() -> tuple[bool, str, float]:
+    """
+    Check if we're in an optimal trading window after a major model update.
+
+    Model update schedule (approximate availability in ET):
+    - GFS 00Z  → ~5:00 AM ET
+    - ECMWF 00Z → ~5:30 AM ET
+    - GFS 12Z  → ~1:30 PM ET
+    - GFS 18Z  → ~8:00 PM ET
+
+    Best times to trade: 30-90 minutes after model updates when data is fresh
+    but market hasn't fully adjusted yet.
+
+    Returns:
+        Tuple of (is_optimal, reason, edge_bonus)
+        edge_bonus: Extra edge credit for optimal timing (0.0 to 0.05)
+    """
+    try:
+        eastern = ZoneInfo('America/New_York')
+        now_et = datetime.now(eastern)
+        hour = now_et.hour
+        minute = now_et.minute
+        time_decimal = hour + minute / 60.0
+
+        # Optimal windows after model updates (start_hour, end_hour, model_name)
+        optimal_windows = [
+            (5.0, 6.5, "GFS/ECMWF 00Z"),      # 5:00-6:30 AM (after overnight runs)
+            (13.5, 15.0, "GFS 12Z"),           # 1:30-3:00 PM (after midday run)
+            (20.0, 21.5, "GFS 18Z"),           # 8:00-9:30 PM (after evening run)
+        ]
+
+        for start, end, model in optimal_windows:
+            if start <= time_decimal < end:
+                # Give edge bonus for trading right after model update
+                # Higher bonus closer to the start of the window
+                window_progress = (time_decimal - start) / (end - start)
+                edge_bonus = 0.03 * (1 - window_progress)  # 3% bonus at start, fading to 0%
+                return True, f"Post-{model} update window", edge_bonus
+
+        return False, f"Not in post-model-update window ({hour}:{minute:02d} ET)", 0.0
+
+    except Exception as e:
+        logger.warning(f"Could not check model update timing: {e}")
+        return False, "Could not determine timezone", 0.0
+
+
 @dataclass
 class TradeSignal:
     """Represents a trade opportunity identified by the edge calculator."""
@@ -337,11 +383,19 @@ class EdgeCalculator:
             logger.debug(f"Skipping {ticker}: {days_out} days out exceeds max {MAX_FORECAST_DAYS} (forecast accuracy)")
             return None
 
-        # Calculate adjusted edge threshold based on time
-        # Same-day (days_out=0): Use base threshold - forecasts are accurate
-        # Next-day (days_out=1): Add penalty - forecasts may change overnight
+        # Calculate adjusted edge threshold based on timing
+        # ENTRY TIMING RULES (user-defined best practices):
+        # - Same-day (days_out=0): Require higher edge (20%+) - less time to be right
+        # - Next-day (days_out=1): Optimal window - use base threshold
+        # - 2+ days out: Already filtered by MAX_FORECAST_DAYS
         adjusted_edge_threshold = MIN_EDGE_THRESHOLD
-        if days_out > 0:
+
+        # Same-day trading requires higher conviction (markets have more info)
+        SAME_DAY_EDGE_REQUIREMENT = 0.20  # 20% edge required for day-of trades
+        if days_out == 0:
+            adjusted_edge_threshold = max(adjusted_edge_threshold, SAME_DAY_EDGE_REQUIREMENT)
+            logger.debug(f"{ticker}: Same-day trade, edge threshold set to {adjusted_edge_threshold:.0%}")
+        elif days_out > 0:
             adjusted_edge_threshold += NEXT_DAY_EDGE_PENALTY
             logger.debug(f"{ticker}: Next-day trade, edge threshold increased to {adjusted_edge_threshold:.0%}")
 
@@ -351,6 +405,13 @@ class EdgeCalculator:
         if not in_window:
             adjusted_edge_threshold += OVERNIGHT_EDGE_PENALTY
             logger.info(f"{ticker}: {window_reason} - edge threshold increased to {adjusted_edge_threshold:.0%}")
+
+        # MODEL UPDATE TIMING BONUS: Reduce edge requirement right after model updates
+        # Fresh forecasts + market hasn't adjusted = alpha opportunity
+        is_optimal_time, timing_reason, edge_bonus = is_post_model_update()
+        if is_optimal_time and edge_bonus > 0:
+            adjusted_edge_threshold = max(0.20, adjusted_edge_threshold - edge_bonus)
+            logger.info(f"{ticker}: {timing_reason} - edge threshold reduced to {adjusted_edge_threshold:.0%} (bonus: {edge_bonus:.0%})")
 
         # Skip markets at extreme prices (can't calculate Kelly, minimal liquidity)
         if market_price <= 0.01 or market_price >= 0.99:

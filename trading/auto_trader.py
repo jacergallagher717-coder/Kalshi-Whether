@@ -353,6 +353,46 @@ class AutoTrader:
 
         return True  # Live trade was successful
 
+    def cleanup_stale_orders(self, max_age_hours: int = 6) -> int:
+        """
+        Cancel stale resting orders that are unlikely to fill.
+
+        Args:
+            max_age_hours: Cancel orders older than this many hours
+
+        Returns:
+            Number of orders cancelled
+        """
+        if not self.live_trading:
+            return 0
+
+        try:
+            all_orders = self.trading_client.get_orders(status="resting")
+            cancelled = 0
+            now = datetime.utcnow()
+
+            for order in all_orders:
+                # Skip if no created_at timestamp
+                if not order.created_at:
+                    continue
+
+                age_hours = (now - order.created_at).total_seconds() / 3600
+
+                # Cancel if too old OR if price is too low (1-2¢ orders won't fill)
+                if age_hours > max_age_hours or order.price <= 0.02:
+                    reason = f"stale ({age_hours:.1f}h old)" if age_hours > max_age_hours else f"low price (${order.price:.2f})"
+                    logger.info(f"Cancelling {reason} order: {order.ticker} {order.action} {order.side} @ ${order.price:.2f}")
+                    if self.trading_client.cancel_order(order.order_id):
+                        cancelled += 1
+
+            if cancelled:
+                logger.info(f"Cleaned up {cancelled} stale resting orders")
+            return cancelled
+
+        except Exception as e:
+            logger.warning(f"Error cleaning up stale orders: {e}")
+            return 0
+
     def check_exits(self) -> List[str]:
         """
         Check all open positions for exit conditions.
@@ -445,29 +485,52 @@ class AutoTrader:
 
         Args:
             position: Position to exit
+
+        Returns:
+            True if exit order placed successfully
         """
+        ticker = position.ticker
+
+        # SAFEGUARD: Check for existing resting exit orders
+        try:
+            existing_orders = self.trading_client.get_orders(ticker=ticker, status="resting")
+            exit_orders = [o for o in existing_orders if o.action == "sell"]
+            if exit_orders:
+                logger.info(f"Already have {len(exit_orders)} resting exit orders for {ticker}, skipping")
+                return False
+        except Exception as e:
+            logger.warning(f"Could not check existing orders: {e}")
+
         # Get market price from production
-        market = self.market_client.get_market(position.ticker)
+        market = self.market_client.get_market(ticker)
         if not market:
-            logger.error(f"Cannot get market for exit: {position.ticker}")
-            return
+            logger.error(f"Cannot get market for exit: {ticker}")
+            return False
 
         # Determine exit parameters
         if position.direction == "BUY_YES":
             # Sell YES position
             side = "yes"
             # Sell at bid (or slightly below for fills)
-            exit_price = max(market.yes_bid - 0.01, 0.01)
+            exit_price = market.yes_bid - 0.01 if market.yes_bid > 0.02 else market.yes_bid
         else:
             # Sell NO position
             side = "no"
             no_bid = 1 - market.yes_ask
-            exit_price = max(no_bid - 0.01, 0.01)
+            exit_price = no_bid - 0.01 if no_bid > 0.02 else no_bid
+
+        # SAFEGUARD: Don't place orders at absurdly low prices (below 3¢)
+        # These won't fill and just create resting order clutter
+        MIN_EXIT_PRICE = 0.03
+        if exit_price < MIN_EXIT_PRICE:
+            logger.warning(f"Exit price ${exit_price:.2f} too low for {ticker} - skipping (would create resting order)")
+            logger.info(f"Consider holding {ticker} to settlement or manually exiting")
+            return False
 
         try:
             # Execute on demo trading client
             order = self.trading_client.sell_position(
-                position.ticker,
+                ticker,
                 side,
                 position.contracts,
                 exit_price
@@ -475,11 +538,13 @@ class AutoTrader:
 
             if order:
                 trade_logger.info(
-                    f"EXIT ORDER | {order.order_id} | {position.ticker} | "
+                    f"EXIT ORDER | {order.order_id} | {ticker} | "
                     f"Sold {position.contracts} @ ${exit_price:.2f}"
                 )
+                return True
         except Exception as e:
             logger.error(f"Error executing exit: {e}")
+        return False
 
     def run_continuous(self, interval_minutes: int = None):
         """
@@ -514,6 +579,11 @@ class AutoTrader:
             try:
                 scan_count += 1
                 print(f"\n[Scan #{scan_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+                # Cleanup stale resting orders every scan
+                stale_cancelled = self.cleanup_stale_orders()
+                if stale_cancelled:
+                    print(f"  Cancelled {stale_cancelled} stale orders")
 
                 # Check for exits first
                 exits = self.check_exits()

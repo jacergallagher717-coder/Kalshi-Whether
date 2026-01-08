@@ -773,6 +773,47 @@ class KalshiClient:
         logger.info(f"Placing SELL {side.upper()} order: {ticker} x{count} @ ${limit_price:.2f}")
         return self.place_order(ticker, side, "sell", count, limit_price, "limit")
 
+    def get_orders(self, ticker: str = None, status: str = "resting") -> List[Order]:
+        """
+        Get orders, optionally filtered by ticker and status.
+
+        Args:
+            ticker: Optional ticker to filter by
+            status: Order status filter ("resting", "pending", "all")
+
+        Returns:
+            List of Order objects
+        """
+        params = {"limit": 100}
+        if ticker:
+            params["ticker"] = ticker
+        if status and status != "all":
+            params["status"] = status
+
+        response = self._request("GET", "/portfolio/orders", params=params)
+        if not response or "orders" not in response:
+            return []
+
+        orders = []
+        for order_data in response["orders"]:
+            price = order_data.get("yes_price") or order_data.get("no_price") or 0
+            if price > 1:
+                price = price / 100
+            orders.append(Order(
+                order_id=order_data.get("order_id", ""),
+                ticker=order_data.get("ticker", ""),
+                side=order_data.get("side", ""),
+                action=order_data.get("action", ""),
+                type=order_data.get("type", "limit"),
+                status=order_data.get("status", ""),
+                count=order_data.get("count", 0),
+                price=price,
+                filled_count=order_data.get("filled_count", 0),
+                remaining_count=order_data.get("remaining_count", 0),
+                created_at=self._parse_datetime(order_data.get("created_time"))
+            ))
+        return orders
+
     def cancel_order(self, order_id: str) -> bool:
         """
         Cancel an open order.
@@ -788,6 +829,23 @@ class KalshiClient:
             logger.info(f"Cancelled order {order_id}")
             return True
         return False
+
+    def cancel_orders_for_ticker(self, ticker: str) -> int:
+        """
+        Cancel all resting orders for a specific ticker.
+
+        Args:
+            ticker: Market ticker
+
+        Returns:
+            Number of orders cancelled
+        """
+        orders = self.get_orders(ticker=ticker, status="resting")
+        cancelled = 0
+        for order in orders:
+            if self.cancel_order(order.order_id):
+                cancelled += 1
+        return cancelled
 
     def get_fills(self, ticker: str = None, limit: int = 100) -> List[Dict]:
         """
