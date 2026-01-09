@@ -37,14 +37,14 @@ MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.30"))  # 30% minim
 MIN_PROBABILITY_THRESHOLD = float(os.getenv("MIN_PROBABILITY_THRESHOLD", "0.20"))  # 20% min probability (skip long-shots)
 MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.50"))  # 50% confidence required
 MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.65"))  # 65% model agreement
-MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "225"))  # Max $2.25 per trade (1.5x increase)
-MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "30"))  # Max 30 contracts (1.5x increase)
+MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "1000"))  # Max $10 per trade (quality over quantity)
+MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "50"))  # Max 50 contracts
 
 # Aggressive Sizing for High-Edge Trades
-# When edge is 50%+, we're very confident - size up
+# With sweet spot filter, we take fewer but better trades - size up accordingly
 HIGH_EDGE_THRESHOLD = float(os.getenv("HIGH_EDGE_THRESHOLD", "0.50"))  # 50%+ edge = high conviction
-HIGH_EDGE_POSITION_PERCENT = float(os.getenv("HIGH_EDGE_POSITION_PERCENT", "0.075"))  # 7.5% of bankroll for 50%+ edge (1.5x)
-NORMAL_POSITION_PERCENT = float(os.getenv("NORMAL_POSITION_PERCENT", "0.03"))  # 3% of bankroll for normal trades (1.5x)
+HIGH_EDGE_POSITION_PERCENT = float(os.getenv("HIGH_EDGE_POSITION_PERCENT", "0.12"))  # 12% of bankroll for 50%+ edge
+NORMAL_POSITION_PERCENT = float(os.getenv("NORMAL_POSITION_PERCENT", "0.06"))  # 6% of bankroll for normal trades
 
 # Time-based Trading Filters (forecast accuracy decays with time)
 # Forecasts update overnight - trading tomorrow's weather at midnight is risky
@@ -59,9 +59,11 @@ TRADING_WINDOW_START_HOUR = int(os.getenv("TRADING_WINDOW_START_HOUR", "6"))  # 
 TRADING_WINDOW_END_HOUR = int(os.getenv("TRADING_WINDOW_END_HOUR", "21"))  # 9pm ET (allow evening trades)
 OVERNIGHT_EDGE_PENALTY = float(os.getenv("OVERNIGHT_EDGE_PENALTY", "0.15"))  # 15% more edge required 9pm-6am
 
-# Price Filters
-MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.10"))  # Don't buy YES below 10 cents (was 8)
-MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.45"))  # Don't buy NO above 45 cents
+# Price Filters - "Sweet Spot" for optimal risk/reward
+# Only trade when price is in the value zone (good payout ratio)
+MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.20"))  # Don't buy YES below 20 cents (too unlikely)
+MAX_YES_PRICE = float(os.getenv("MAX_YES_PRICE", "0.70"))  # Don't buy YES above 70 cents (poor payout)
+MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.45"))  # Don't buy NO above 45 cents on brackets
 BRACKET_POSITION_SCALE = float(os.getenv("BRACKET_POSITION_SCALE", "0.5"))  # Half position size on brackets
 MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "3.0"))  # 3°F spread allowed (balanced)
 MIN_MODELS_REQUIRED = int(os.getenv("MIN_MODELS_REQUIRED", "3"))  # Require at least 3 models

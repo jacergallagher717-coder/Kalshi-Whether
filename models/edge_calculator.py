@@ -13,7 +13,7 @@ import uuid
 
 from config.settings import (
     MIN_EDGE_THRESHOLD, MIN_PROBABILITY_THRESHOLD, MAX_POSITION_SIZE, MAX_CONTRACTS_PER_TRADE,
-    MIN_YES_PRICE, MAX_NO_PRICE_BRACKET, BRACKET_POSITION_SCALE,
+    MIN_YES_PRICE, MAX_YES_PRICE, MAX_NO_PRICE_BRACKET, BRACKET_POSITION_SCALE,
     MAX_MODEL_SPREAD, MIN_CONFIDENCE_SCORE, MIN_MODEL_AGREEMENT, MIN_MODELS_REQUIRED,
     MAX_FORECAST_DAYS, NEXT_DAY_EDGE_PENALTY,
     TRADING_WINDOW_ENABLED, TRADING_WINDOW_START_HOUR, TRADING_WINDOW_END_HOUR,
@@ -504,15 +504,28 @@ class EdgeCalculator:
             logger.debug(f"Skipping {ticker}: negative EV after fees")
             return None
 
-        # Price filters based on Jan 2 analysis
+        # SWEET SPOT FILTER: Only trade in optimal risk/reward zone
+        # Skip heavy favorites (poor payout) and long shots (low win rate)
         if trade_direction == "BUY_YES":
             # Don't buy very cheap YES (long shots that rarely hit)
             if market_price < MIN_YES_PRICE:
-                logger.debug(f"Skipping {ticker}: YES price ${market_price:.2f} below minimum ${MIN_YES_PRICE:.2f}")
+                logger.debug(f"Skipping {ticker}: YES price ${market_price:.2f} below minimum ${MIN_YES_PRICE:.2f} (long shot)")
+                return None
+            # Don't buy expensive YES (heavy favorite - poor payout ratio)
+            if market_price > MAX_YES_PRICE:
+                logger.debug(f"Skipping {ticker}: YES price ${market_price:.2f} above maximum ${MAX_YES_PRICE:.2f} (poor payout)")
                 return None
         else:  # BUY_NO
             no_price = 1.0 - market_price
-            # Don't buy expensive NO on bracket markets (narrow ranges are risky)
+            # Don't buy very cheap NO (long shots)
+            if no_price < MIN_YES_PRICE:
+                logger.debug(f"Skipping {ticker}: NO price ${no_price:.2f} below minimum ${MIN_YES_PRICE:.2f} (long shot)")
+                return None
+            # Don't buy expensive NO (heavy favorite - poor payout ratio)
+            if no_price > MAX_YES_PRICE:
+                logger.debug(f"Skipping {ticker}: NO price ${no_price:.2f} above maximum ${MAX_YES_PRICE:.2f} (poor payout)")
+                return None
+            # Extra restriction on bracket markets (narrow ranges are harder to hit)
             if is_bracket and no_price > MAX_NO_PRICE_BRACKET:
                 logger.debug(f"Skipping {ticker}: NO price ${no_price:.2f} above bracket max ${MAX_NO_PRICE_BRACKET:.2f}")
                 return None
