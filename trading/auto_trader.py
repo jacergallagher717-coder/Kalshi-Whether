@@ -127,6 +127,8 @@ class AutoTrader:
 
         # SAFEGUARD: Track tickers we've already traded this session
         self.traded_tickers_today: set = set()
+        # SAFEGUARD: Track city/day combos to prevent multiple bracket bets
+        self.traded_city_days_today: set = set()
 
         # SAFEGUARD: Portfolio protection (conviction is the only trade filter, but protect capital)
         self.MAX_PORTFOLIO_PERCENT = 0.50  # Never deploy more than 50% of portfolio
@@ -138,18 +140,85 @@ class AutoTrader:
 
         logger.info(f"Auto trader initialized (live={self.live_trading}, demo={KALSHI_USE_DEMO})")
 
+        # Initialize tracking with existing positions (handles bot restarts)
+        self._init_existing_positions()
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully."""
         logger.info("Shutdown signal received, stopping...")
         self.running = False
+
+    def _init_existing_positions(self):
+        """
+        Initialize tracking sets with existing positions.
+
+        This handles bot restarts - we don't want to place duplicate
+        orders for city/days we already have positions in.
+        """
+        if not self.live_trading:
+            # For paper trading, load from paper trader
+            try:
+                open_positions = self.paper_trader.get_open_positions()
+                for pos in open_positions:
+                    self.traded_tickers_today.add(pos.ticker)
+                    self.traded_city_days_today.add(self._get_city_date_prefix(pos.ticker))
+                if open_positions:
+                    logger.info(f"Loaded {len(open_positions)} existing paper positions into tracking")
+            except Exception as e:
+                logger.warning(f"Could not load paper positions: {e}")
+            return
+
+        # For live trading, load from Kalshi
+        try:
+            if not self.trading_client.login():
+                logger.warning("Could not login to load existing positions")
+                return
+
+            positions = self.trading_client.get_positions()
+            loaded = 0
+            for pos in positions:
+                # Track if there's any exposure or resting orders
+                if pos.market_exposure != 0 or pos.resting_orders_count > 0:
+                    self.traded_tickers_today.add(pos.ticker)
+                    self.traded_city_days_today.add(self._get_city_date_prefix(pos.ticker))
+                    loaded += 1
+
+            # Also load resting orders
+            try:
+                resting_orders = self.trading_client.get_orders(status="resting")
+                for order in resting_orders:
+                    prefix = self._get_city_date_prefix(order.ticker)
+                    if prefix not in self.traded_city_days_today:
+                        self.traded_tickers_today.add(order.ticker)
+                        self.traded_city_days_today.add(prefix)
+                        loaded += 1
+            except Exception as e:
+                logger.warning(f"Could not load resting orders: {e}")
+
+            if loaded > 0:
+                logger.info(f"Loaded {loaded} existing positions/orders into tracking: {self.traded_city_days_today}")
+        except Exception as e:
+            logger.warning(f"Could not load existing positions: {e}")
 
     def _reset_daily_counters(self):
         """Reset daily counters if it's a new day."""
         if date.today() != self.daily_reset_date:
             self.trades_today = 0
             self.traded_tickers_today.clear()
+            self.traded_city_days_today.clear()
             self.daily_reset_date = date.today()
             logger.info("Daily counters reset")
+
+    def _get_city_date_prefix(self, ticker: str) -> str:
+        """
+        Extract city/date prefix from ticker to prevent multiple bracket bets.
+
+        Example: KXHIGHDEN-26JAN08-B40 -> KXHIGHDEN-26JAN08
+        """
+        parts = ticker.split('-')
+        if len(parts) >= 2:
+            return f"{parts[0]}-{parts[1]}"
+        return ticker
 
     def _calculate_position_size(self, signal: TradeSignal, balance: float) -> int:
         """
@@ -273,39 +342,55 @@ class AutoTrader:
             True if trade executed successfully
         """
         ticker = signal.ticker
+        city_date_prefix = self._get_city_date_prefix(ticker)
 
         # SAFEGUARD 1: Check in-memory tracking first (bulletproof)
         if ticker in self.traded_tickers_today:
             logger.info(f"SAFEGUARD: Already traded {ticker} today, skipping")
             return False
 
-        # SAFEGUARD 2: Check if we already have a position in this market
-        # SAFEGUARD 3: Check if we already have ANY position for this city/day (no multi-bracket)
+        # SAFEGUARD 2: Check city/day prefix in memory (prevents multiple bracket bets)
+        if city_date_prefix in self.traded_city_days_today:
+            logger.info(f"SAFEGUARD: Already traded {city_date_prefix} today (multi-bracket prevention), skipping {ticker}")
+            return False
+
+        # SAFEGUARD 3: Check if we already have a position OR resting order for this city/day
         if self.live_trading:
-            # Check real Kalshi positions when live trading
             try:
                 kalshi_positions = self.trading_client.get_positions()
 
-                # Extract city and date from ticker (e.g., KXHIGHDEN-26JAN08-B40 -> DEN, 26JAN08)
-                ticker_parts = ticker.split('-')
-                if len(ticker_parts) >= 2:
-                    ticker_city = ticker_parts[0]  # KXHIGHDEN
-                    ticker_date = ticker_parts[1]  # 26JAN08
-                    city_date_prefix = f"{ticker_city}-{ticker_date}"
-                else:
-                    city_date_prefix = ticker
-
                 for pos in kalshi_positions:
-                    # Use market_exposure (not count) - position exists if exposure > 0
-                    if pos.market_exposure != 0:
+                    pos_prefix = self._get_city_date_prefix(pos.ticker)
+
+                    # Check if ANY position exists for this city/day (filled OR resting)
+                    # market_exposure != 0 means filled position
+                    # resting_orders_count > 0 means pending orders
+                    has_filled = pos.market_exposure != 0
+                    has_resting = pos.resting_orders_count > 0
+
+                    if has_filled or has_resting:
                         # Check exact ticker match
                         if pos.ticker == ticker:
-                            logger.info(f"Already have REAL position in {ticker} (exposure: {pos.market_exposure}), skipping")
+                            status = "filled" if has_filled else "resting"
+                            logger.info(f"Already have {status} position in {ticker}, skipping")
                             return False
                         # Check same city/day (prevents multiple bracket bets)
-                        if pos.ticker.startswith(city_date_prefix):
-                            logger.info(f"SAFEGUARD: Already have position in {pos.ticker} for same city/day, skipping {ticker}")
+                        if pos_prefix == city_date_prefix:
+                            status = "filled" if has_filled else "resting"
+                            logger.info(f"SAFEGUARD: Already have {status} position in {pos.ticker} for same city/day, skipping {ticker}")
                             return False
+
+                # SAFEGUARD 4: Also check resting orders directly (belt and suspenders)
+                try:
+                    resting_orders = self.trading_client.get_orders(status="resting")
+                    for order in resting_orders:
+                        order_prefix = self._get_city_date_prefix(order.ticker)
+                        if order_prefix == city_date_prefix:
+                            logger.info(f"SAFEGUARD: Already have resting order for {order.ticker}, skipping {ticker}")
+                            return False
+                except Exception as e:
+                    logger.warning(f"Could not check resting orders: {e}")
+
             except Exception as e:
                 # FAIL SAFE: If we can't check positions, DON'T TRADE
                 logger.error(f"SAFEGUARD: Could not verify positions, refusing to trade: {e}")
@@ -316,6 +401,12 @@ class AutoTrader:
             if existing:
                 logger.info(f"Already have paper position in {ticker}, skipping")
                 return False
+            # Also check city/day for paper trading
+            open_positions = self.paper_trader.get_open_positions()
+            for pos in open_positions:
+                if self._get_city_date_prefix(pos.ticker) == city_date_prefix:
+                    logger.info(f"SAFEGUARD: Already have paper position in {pos.ticker} for same city/day, skipping {ticker}")
+                    return False
 
         # DYNAMIC POSITION SIZING based on bankroll and edge
         if self.live_trading:
@@ -347,9 +438,11 @@ class AutoTrader:
                         f"KALSHI ORDER | {kalshi_order.order_id} | {ticker} | "
                         f"Status: {kalshi_order.status}"
                     )
-                    # SAFEGUARD: Mark this ticker as traded
+                    # SAFEGUARD: Mark this ticker AND city/day as traded
                     self.traded_tickers_today.add(ticker)
+                    self.traded_city_days_today.add(city_date_prefix)
                     self.trades_today += 1
+                    logger.info(f"Tracked: {ticker} and {city_date_prefix} marked as traded")
                 else:
                     logger.error(f"Failed to place Kalshi order for {ticker}")
                     return False
@@ -361,10 +454,11 @@ class AutoTrader:
         if not self.live_trading:
             paper_trade = self.paper_trader.execute_paper_trade(signal)
             if paper_trade:
-                # Track for paper trading too
+                # Track for paper trading too - both ticker AND city/day
                 self.traded_tickers_today.add(ticker)
+                self.traded_city_days_today.add(city_date_prefix)
                 self.trades_today += 1
-                logger.info(f"Paper trade executed: {paper_trade.id} - {ticker}")
+                logger.info(f"Paper trade executed: {paper_trade.id} - {ticker} (tracked {city_date_prefix})")
                 return True
             return False
 
