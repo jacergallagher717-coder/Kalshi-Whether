@@ -58,11 +58,11 @@ TRADING_WINDOW_END_HOUR = int(os.getenv("TRADING_WINDOW_END_HOUR", "21"))  # 9pm
 OVERNIGHT_EDGE_PENALTY = float(os.getenv("OVERNIGHT_EDGE_PENALTY", "0.05"))  # 5% more edge required 9pm-6am (was 15%)
 
 # Price Filters - "Sweet Spot" for optimal risk/reward (WIDENED for more trades)
-MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.15"))  # Don't buy YES below 15 cents (was 20%)
-MAX_YES_PRICE = float(os.getenv("MAX_YES_PRICE", "0.80"))  # Don't buy YES above 80 cents (was 70%)
-MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.55"))  # Don't buy NO above 55 cents on brackets (was 45%)
+MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.08"))  # Don't buy YES below 8 cents (was 15%) - allow more high-edge low-price bets
+MAX_YES_PRICE = float(os.getenv("MAX_YES_PRICE", "0.85"))  # Don't buy YES above 85 cents (was 80%)
+MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.70"))  # Don't buy NO above 70 cents on brackets (was 55%)
 BRACKET_POSITION_SCALE = float(os.getenv("BRACKET_POSITION_SCALE", "0.5"))  # Half position size on brackets
-MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "4.0"))  # 4°F spread allowed (was 3°F)
+MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "8.0"))  # 8°F spread allowed (was 4°F) - models often disagree more
 MIN_MODELS_REQUIRED = int(os.getenv("MIN_MODELS_REQUIRED", "2"))  # Require at least 2 models (was 3)
 
 CONFIDENCE_LEVELS = {
