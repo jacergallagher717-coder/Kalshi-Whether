@@ -428,10 +428,13 @@ def cmd_auto(args):
             print("WARNING: You are about to trade with REAL MONEY!")
             print("KALSHI_USE_DEMO=false means PRODUCTION mode")
             print("!"*60)
-            confirm = input("\nType 'CONFIRM' to proceed: ")
-            if confirm != "CONFIRM":
-                print("Aborted.")
-                return
+            if not getattr(args, 'yes', False):
+                confirm = input("\nType 'CONFIRM' to proceed: ")
+                if confirm != "CONFIRM":
+                    print("Aborted.")
+                    return
+            else:
+                print("\n--yes flag provided, proceeding without confirmation...")
 
     # Create auto trader
     auto_trader = AutoTrader(live_trading=args.live)
@@ -745,6 +748,7 @@ Examples:
     auto_parser.add_argument("--once", action="store_true", help="Single scan then exit")
     auto_parser.add_argument("--dry-run", action="store_true", help="Scan but don't execute")
     auto_parser.add_argument("--interval", type=int, default=15, help="Minutes between scans")
+    auto_parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation for production mode (use with nohup)")
     auto_parser.set_defaults(func=cmd_auto)
 
     # Login command (NEW)
