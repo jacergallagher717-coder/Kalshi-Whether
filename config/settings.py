@@ -31,8 +31,9 @@ AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
 AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "999"))  # No limit - conviction is the filter
 AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "999"))  # No limit - conviction is the filter
 
-# Trading Parameters - MORE AGGRESSIVE (need more trades)
-MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.25"))  # 25% minimum edge (was 30%)
+# Trading Parameters - CONSERVATIVE (only trade real edge)
+# With realistic uncertainty, we need higher edge threshold
+MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.15"))  # 15% minimum edge - real edge, not illusory
 MIN_PROBABILITY_THRESHOLD = float(os.getenv("MIN_PROBABILITY_THRESHOLD", "0.25"))  # 25% min probability
 MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.40"))  # 40% confidence (was 50%)
 MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.55"))  # 55% model agreement (was 65%)
@@ -101,16 +102,17 @@ USE_CITY_WEIGHTS = os.getenv("USE_CITY_WEIGHTS", "true").lower() == "true"
 
 # Temperature Probability Distribution
 # Standard deviation for temperature forecasts (in °F)
-# Increases with forecast horizon
+# REALISTIC VALUES based on actual forecast verification studies
+# Previous values were WAY too tight, causing illusory "edge"
 TEMP_UNCERTAINTY = {
-    0: 1.0,   # Same day: ±1°F std dev (forecasts very accurate)
-    1: 2.0,   # 1 day out: ±2°F std dev
-    2: 3.0,   # 2 days out: ±3°F std dev
-    3: 4.0,   # 3 days out: ±4°F std dev
-    4: 5.0,   # 4 days out: ±5°F std dev
-    5: 6.0,   # 5 days out: ±6°F std dev
-    6: 7.0,   # 6 days out: ±7°F std dev
-    7: 8.0    # 7 days out: ±8°F std dev
+    0: 3.0,   # Same day: ±3°F std dev (was 1.0 - too confident!)
+    1: 4.0,   # 1 day out: ±4°F std dev (was 2.0)
+    2: 5.0,   # 2 days out: ±5°F std dev (was 3.0)
+    3: 6.0,   # 3 days out: ±6°F std dev
+    4: 7.0,   # 4 days out: ±7°F std dev
+    5: 8.0,   # 5 days out: ±8°F std dev
+    6: 9.0,   # 6 days out: ±9°F std dev
+    7: 10.0   # 7 days out: ±10°F std dev
 }
 
 # Data Collection Schedule
