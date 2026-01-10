@@ -31,13 +31,12 @@ AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
 AUTO_TRADE_MAX_DAILY_TRADES = int(os.getenv("AUTO_TRADE_MAX_DAILY_TRADES", "999"))  # No limit - conviction is the filter
 AUTO_TRADE_MAX_OPEN_POSITIONS = int(os.getenv("AUTO_TRADE_MAX_OPEN_POSITIONS", "999"))  # No limit - conviction is the filter
 
-# Trading Parameters - BALANCED (based on Jan 5-6 trade analysis)
-# Philly won big with ~40% edge, but we don't want to miss good opportunities
-MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.30"))  # 30% minimum edge
-MIN_PROBABILITY_THRESHOLD = float(os.getenv("MIN_PROBABILITY_THRESHOLD", "0.20"))  # 20% min probability (skip long-shots)
-MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.50"))  # 50% confidence required
-MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.65"))  # 65% model agreement
-MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "1000"))  # Max $10 per trade (quality over quantity)
+# Trading Parameters - MORE AGGRESSIVE (need more trades)
+MIN_EDGE_THRESHOLD = float(os.getenv("MIN_EDGE_THRESHOLD", "0.25"))  # 25% minimum edge (was 30%)
+MIN_PROBABILITY_THRESHOLD = float(os.getenv("MIN_PROBABILITY_THRESHOLD", "0.25"))  # 25% min probability
+MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", "0.40"))  # 40% confidence (was 50%)
+MIN_MODEL_AGREEMENT = float(os.getenv("MIN_MODEL_AGREEMENT", "0.55"))  # 55% model agreement (was 65%)
+MAX_POSITION_SIZE = int(os.getenv("MAX_POSITION_SIZE", "1000"))  # Max $10 per trade
 MAX_CONTRACTS_PER_TRADE = int(os.getenv("MAX_CONTRACTS_PER_TRADE", "50"))  # Max 50 contracts
 
 # Aggressive Sizing for High-Edge Trades
@@ -47,9 +46,8 @@ HIGH_EDGE_POSITION_PERCENT = float(os.getenv("HIGH_EDGE_POSITION_PERCENT", "0.12
 NORMAL_POSITION_PERCENT = float(os.getenv("NORMAL_POSITION_PERCENT", "0.06"))  # 6% of bankroll for normal trades
 
 # Time-based Trading Filters (forecast accuracy decays with time)
-# Forecasts update overnight - trading tomorrow's weather at midnight is risky
-MAX_FORECAST_DAYS = int(os.getenv("MAX_FORECAST_DAYS", "1"))  # Only trade same-day (0) and next-day (1)
-NEXT_DAY_EDGE_PENALTY = float(os.getenv("NEXT_DAY_EDGE_PENALTY", "0.10"))  # Require 10% more edge for next-day
+MAX_FORECAST_DAYS = int(os.getenv("MAX_FORECAST_DAYS", "2"))  # Trade up to 2 days out (was 1)
+NEXT_DAY_EDGE_PENALTY = float(os.getenv("NEXT_DAY_EDGE_PENALTY", "0.05"))  # Require 5% more edge for next-day (was 10%)
 PREFER_SAME_DAY = os.getenv("PREFER_SAME_DAY", "true").lower() == "true"  # Prioritize same-day markets
 
 # Morning Trading Window (times in Eastern)
@@ -57,16 +55,15 @@ PREFER_SAME_DAY = os.getenv("PREFER_SAME_DAY", "true").lower() == "true"  # Prio
 TRADING_WINDOW_ENABLED = os.getenv("TRADING_WINDOW_ENABLED", "true").lower() == "true"
 TRADING_WINDOW_START_HOUR = int(os.getenv("TRADING_WINDOW_START_HOUR", "6"))  # 6am ET
 TRADING_WINDOW_END_HOUR = int(os.getenv("TRADING_WINDOW_END_HOUR", "21"))  # 9pm ET (allow evening trades)
-OVERNIGHT_EDGE_PENALTY = float(os.getenv("OVERNIGHT_EDGE_PENALTY", "0.15"))  # 15% more edge required 9pm-6am
+OVERNIGHT_EDGE_PENALTY = float(os.getenv("OVERNIGHT_EDGE_PENALTY", "0.05"))  # 5% more edge required 9pm-6am (was 15%)
 
-# Price Filters - "Sweet Spot" for optimal risk/reward
-# Only trade when price is in the value zone (good payout ratio)
-MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.20"))  # Don't buy YES below 20 cents (too unlikely)
-MAX_YES_PRICE = float(os.getenv("MAX_YES_PRICE", "0.70"))  # Don't buy YES above 70 cents (poor payout)
-MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.45"))  # Don't buy NO above 45 cents on brackets
+# Price Filters - "Sweet Spot" for optimal risk/reward (WIDENED for more trades)
+MIN_YES_PRICE = float(os.getenv("MIN_YES_PRICE", "0.15"))  # Don't buy YES below 15 cents (was 20%)
+MAX_YES_PRICE = float(os.getenv("MAX_YES_PRICE", "0.80"))  # Don't buy YES above 80 cents (was 70%)
+MAX_NO_PRICE_BRACKET = float(os.getenv("MAX_NO_PRICE_BRACKET", "0.55"))  # Don't buy NO above 55 cents on brackets (was 45%)
 BRACKET_POSITION_SCALE = float(os.getenv("BRACKET_POSITION_SCALE", "0.5"))  # Half position size on brackets
-MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "3.0"))  # 3°F spread allowed (balanced)
-MIN_MODELS_REQUIRED = int(os.getenv("MIN_MODELS_REQUIRED", "3"))  # Require at least 3 models
+MAX_MODEL_SPREAD = float(os.getenv("MAX_MODEL_SPREAD", "4.0"))  # 4°F spread allowed (was 3°F)
+MIN_MODELS_REQUIRED = int(os.getenv("MIN_MODELS_REQUIRED", "2"))  # Require at least 2 models (was 3)
 
 CONFIDENCE_LEVELS = {
     "high": 0.15,              # 15%+ edge = high confidence
