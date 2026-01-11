@@ -6,18 +6,31 @@ It means a distribution centered around 85°F with uncertainty.
 
 Method:
 1. Take point forecast (e.g., 85°F)
-2. Apply uncertainty based on forecast horizon (see TEMP_UNCERTAINTY in settings)
-3. Use normal distribution to calculate P(temp > threshold)
+2. Apply uncertainty based on forecast horizon AND model spread
+3. Use Student's t-distribution (fat tails) to account for extreme forecast errors
+4. Apply ensemble independence correction (models are correlated ~60%)
 """
 
 from scipy import stats
 import numpy as np
 from typing import Dict, Optional, Tuple
 
-from config.settings import TEMP_UNCERTAINTY, MODEL_WEIGHTS, CITY_MODEL_WEIGHTS, USE_CITY_WEIGHTS
+from config.settings import (
+    TEMP_UNCERTAINTY, MODEL_WEIGHTS, CITY_MODEL_WEIGHTS, USE_CITY_WEIGHTS,
+    T_DISTRIBUTION_DF, ENSEMBLE_CORRELATION, MARKET_EFFICIENCY_FACTOR
+)
 from utils.logger import get_logger
 
 logger = get_logger("probability")
+
+# Effective sample size with correlation
+# n_eff = n / (1 + (n-1)*rho)
+# For 4 models with rho=0.6: n_eff = 4 / (1 + 3*0.6) = 1.43
+def get_effective_sample_size(n_models: int, correlation: float = ENSEMBLE_CORRELATION) -> float:
+    """Calculate effective sample size accounting for model correlation."""
+    if n_models <= 1:
+        return 1.0
+    return n_models / (1 + (n_models - 1) * correlation)
 
 
 def get_model_weights_for_city(city: str = None) -> Dict[str, float]:
@@ -62,31 +75,44 @@ def forecast_to_probability(
     forecast_temp: float,
     threshold: float,
     days_out: int,
-    direction: str = "above"
+    direction: str = "above",
+    model_spread: float = 0.0
 ) -> float:
     """
     Convert a temperature forecast to probability of exceeding threshold.
 
-    Uses a normal distribution centered on the forecast with standard deviation
-    that increases with forecast horizon.
+    QUANT AUDIT FIXES:
+    1. Uses Student's t-distribution (fat tails) instead of normal
+    2. Adjusts uncertainty based on model spread (disagreement)
 
     Args:
         forecast_temp: Forecasted temperature in °F
         threshold: Market strike price (e.g., 85°F)
         days_out: Days until settlement (affects uncertainty)
         direction: "above" for P(T > threshold), "below" for P(T < threshold)
+        model_spread: Standard deviation of model forecasts (disagreement indicator)
 
     Returns:
         Probability between 0 and 1
 
     Example:
         >>> forecast_to_probability(85.0, 82.0, 1, "above")
-        0.933  # ~93% chance temp > 82 when forecast is 85 with 2°F std dev
+        0.90  # ~90% chance temp > 82 when forecast is 85 (with fat tails)
     """
-    std_dev = get_uncertainty_for_days(days_out)
+    from config.settings import MODEL_SPREAD_UNCERTAINTY_FACTOR
 
-    # Create normal distribution centered on forecast
-    dist = stats.norm(loc=forecast_temp, scale=std_dev)
+    base_std_dev = get_uncertainty_for_days(days_out)
+
+    # QUANT AUDIT FIX: Add model spread to uncertainty
+    # When models disagree, we're less certain
+    spread_adjustment = model_spread * MODEL_SPREAD_UNCERTAINTY_FACTOR
+    effective_std_dev = base_std_dev + spread_adjustment
+
+    # QUANT AUDIT FIX: Use Student's t-distribution for fat tails
+    # Temperature forecast errors have fat tails - extreme errors occur
+    # more often than normal distribution predicts
+    # t-distribution with df=6 captures this better
+    dist = stats.t(df=T_DISTRIBUTION_DF, loc=forecast_temp, scale=effective_std_dev)
 
     if direction == "above":
         # P(T > threshold) = 1 - CDF(threshold)
@@ -103,7 +129,8 @@ def forecast_to_bracket_probability(
     forecast_temp: float,
     bracket_midpoint: float,
     days_out: int,
-    market_type: str = "high"
+    market_type: str = "high",
+    model_spread: float = 0.0
 ) -> float:
     """
     Convert a temperature forecast to probability of landing in a bracket.
@@ -111,11 +138,16 @@ def forecast_to_bracket_probability(
     A bracket market like B78.5 represents the range 78-79°F.
     P(78 ≤ T < 79) = P(T > 78) - P(T > 79) for high temp markets.
 
+    QUANT AUDIT FIXES:
+    1. Uses Student's t-distribution (fat tails)
+    2. Adjusts uncertainty based on model spread
+
     Args:
         forecast_temp: Forecasted temperature in °F
         bracket_midpoint: Midpoint of bracket (e.g., 78.5 for 78-79 range)
         days_out: Days until settlement
         market_type: "high" or "low" - affects which direction we calculate
+        model_spread: Standard deviation of model forecasts
 
     Returns:
         Probability of landing in the bracket (0-1)
@@ -123,14 +155,22 @@ def forecast_to_bracket_probability(
     Example:
         For Austin with forecast 80°F and bracket 78-79°F:
         >>> forecast_to_bracket_probability(80.0, 78.5, 0, "high")
-        0.11  # ~11% chance high temp lands in 78-79 range when forecasted at 80
+        0.10  # ~10% chance high temp lands in 78-79 range
     """
+    from config.settings import MODEL_SPREAD_UNCERTAINTY_FACTOR
+
     # Bracket bounds: midpoint ± 0.5
     lower_bound = bracket_midpoint - 0.5  # e.g., 78.0
     upper_bound = bracket_midpoint + 0.5  # e.g., 79.0
 
-    std_dev = get_uncertainty_for_days(days_out)
-    dist = stats.norm(loc=forecast_temp, scale=std_dev)
+    base_std_dev = get_uncertainty_for_days(days_out)
+
+    # QUANT AUDIT FIX: Add model spread to uncertainty
+    spread_adjustment = model_spread * MODEL_SPREAD_UNCERTAINTY_FACTOR
+    effective_std_dev = base_std_dev + spread_adjustment
+
+    # QUANT AUDIT FIX: Use Student's t-distribution for fat tails
+    dist = stats.t(df=T_DISTRIBUTION_DF, loc=forecast_temp, scale=effective_std_dev)
 
     # P(lower ≤ T < upper) = CDF(upper) - CDF(lower)
     prob = dist.cdf(upper_bound) - dist.cdf(lower_bound)
@@ -152,8 +192,10 @@ def ensemble_probability(
     """
     Combine multiple forecast sources into ensemble probability.
 
-    Uses weighted average of individual model probabilities, with optional
-    adjustments based on model spread (disagreement).
+    QUANT AUDIT FIXES:
+    1. Passes model spread to probability functions for uncertainty adjustment
+    2. Applies ensemble independence correction (models are correlated)
+    3. Calculates conservative probability bounds
 
     Args:
         forecasts: Dict mapping source to forecast temp {"ecmwf": 85.0, "gfs": 84.0}
@@ -167,11 +209,12 @@ def ensemble_probability(
 
     Returns:
         Dictionary with:
-        - ensemble_prob: Weighted average probability
+        - ensemble_prob: Weighted average probability (with independence correction)
         - model_probs: Individual model probabilities
         - model_spread: Standard deviation of forecasts (disagreement indicator)
         - confidence: How confident we are in the ensemble (0-1)
         - ensemble_temp: Weighted average temperature forecast
+        - conservative_prob: Lower bound probability for edge calculation
     """
     # Use provided weights, or city-specific weights, or defaults
     if weights:
@@ -181,20 +224,22 @@ def ensemble_probability(
     else:
         effective_weights = MODEL_WEIGHTS
 
-    # Calculate probability from each model
-    model_probs = {}
-    valid_forecasts = {}
+    # First pass: calculate model spread for uncertainty adjustment
+    valid_forecasts = {src: temp for src, temp in forecasts.items() if temp is not None}
+    temps = list(valid_forecasts.values())
+    model_spread = np.std(temps) if len(temps) > 1 else 0.0
 
-    for source, temp in forecasts.items():
-        if temp is not None:
-            if is_bracket:
-                # For bracket markets, calculate P(lower ≤ T < upper)
-                prob = forecast_to_bracket_probability(temp, threshold, days_out, market_type)
-            else:
-                # For threshold markets, calculate P(T > threshold) or P(T < threshold)
-                prob = forecast_to_probability(temp, threshold, days_out, direction)
-            model_probs[source] = prob
-            valid_forecasts[source] = temp
+    # Calculate probability from each model (now with spread-adjusted uncertainty)
+    model_probs = {}
+
+    for source, temp in valid_forecasts.items():
+        if is_bracket:
+            # For bracket markets, calculate P(lower ≤ T < upper)
+            prob = forecast_to_bracket_probability(temp, threshold, days_out, market_type, model_spread)
+        else:
+            # For threshold markets, calculate P(T > threshold) or P(T < threshold)
+            prob = forecast_to_probability(temp, threshold, days_out, direction, model_spread)
+        model_probs[source] = prob
 
     if not model_probs:
         logger.warning("No valid forecasts for ensemble calculation")
@@ -203,7 +248,8 @@ def ensemble_probability(
             "model_probs": {},
             "model_spread": 0.0,
             "confidence": 0.0,
-            "ensemble_temp": None
+            "ensemble_temp": None,
+            "conservative_prob": 0.5
         }
 
     # Calculate weighted average probability
@@ -220,20 +266,33 @@ def ensemble_probability(
     ensemble_prob = weighted_prob_sum / total_weight if total_weight > 0 else 0.5
     ensemble_temp = weighted_temp_sum / total_weight if total_weight > 0 else None
 
-    # Calculate model spread (disagreement)
-    temps = list(valid_forecasts.values())
-    model_spread = np.std(temps) if len(temps) > 1 else 0.0
+    # QUANT AUDIT FIX: Apply ensemble independence correction
+    # Models are correlated, so our ensemble has fewer effective samples
+    num_models = len(model_probs)
+    n_effective = get_effective_sample_size(num_models)
+
+    # Calculate standard error of probability estimate
+    # SE = sqrt(p*(1-p)/n_eff)
+    prob_variance = ensemble_prob * (1 - ensemble_prob)
+    prob_se = np.sqrt(prob_variance / n_effective) if n_effective > 0 else 0.2
+
+    # QUANT AUDIT FIX: Conservative probability bound
+    # For BUY_YES, use lower bound; for BUY_NO, use upper bound
+    # This accounts for uncertainty in our probability estimate
+    # Using ~1 standard error gives roughly 84% confidence
+    conservative_prob_low = max(0.01, ensemble_prob - prob_se)
+    conservative_prob_high = min(0.99, ensemble_prob + prob_se)
 
     # Calculate confidence based on:
-    # 1. Number of models agreeing
+    # 1. Effective number of models (accounting for correlation)
     # 2. Model spread (lower spread = higher confidence)
     # 3. Forecast horizon (shorter = higher confidence)
 
-    num_models = len(model_probs)
     max_models = len(MODEL_WEIGHTS)
 
-    # Base confidence from number of models (more models = more confidence)
-    model_confidence = num_models / max_models
+    # Base confidence from effective sample size (not raw count)
+    # n_eff of 1.4 from 4 models gives lower confidence than assuming independence
+    model_confidence = min(1.0, n_effective / 2.0)  # 2 effective samples = full confidence
 
     # Adjust for spread (high spread reduces confidence)
     # If models disagree by more than 5°F, significantly reduce confidence
@@ -250,7 +309,11 @@ def ensemble_probability(
         "model_probs": model_probs,
         "model_spread": model_spread,
         "confidence": confidence,
-        "ensemble_temp": ensemble_temp
+        "ensemble_temp": ensemble_temp,
+        "conservative_prob_low": conservative_prob_low,
+        "conservative_prob_high": conservative_prob_high,
+        "effective_sample_size": n_effective,
+        "prob_std_error": prob_se
     }
 
 

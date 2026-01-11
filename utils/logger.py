@@ -102,3 +102,75 @@ def setup_trade_logger() -> logging.Logger:
         logger.addHandler(trade_handler)
 
     return logger
+
+
+# QUANT AUDIT FIX: Prediction tracking for Brier score validation
+import csv
+
+PREDICTIONS_FILE = os.path.join(LOG_DIR, "predictions.csv")
+
+def log_prediction(
+    ticker: str,
+    target_date: str,
+    location: str,
+    threshold: float,
+    market_type: str,
+    direction: str,
+    our_probability: float,
+    market_price: float,
+    edge: float,
+    model_spread: float,
+    confidence: float,
+    ensemble_temp: float
+):
+    """
+    Log a prediction for later validation against outcomes.
+
+    QUANT AUDIT FIX: Track every prediction to calculate Brier scores
+    and validate calibration of our probability model.
+
+    Args:
+        ticker: Market ticker
+        target_date: Settlement date
+        location: City code
+        threshold: Temperature threshold
+        market_type: "high" or "low"
+        direction: "BUY_YES" or "BUY_NO"
+        our_probability: Our probability estimate
+        market_price: Market YES price
+        edge: Calculated edge
+        model_spread: Model disagreement
+        confidence: Confidence score
+        ensemble_temp: Our forecast temperature
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    # Create file with headers if it doesn't exist
+    file_exists = os.path.exists(PREDICTIONS_FILE)
+
+    with open(PREDICTIONS_FILE, 'a', newline='') as f:
+        writer = csv.writer(f)
+
+        if not file_exists:
+            writer.writerow([
+                'timestamp', 'ticker', 'target_date', 'location', 'threshold',
+                'market_type', 'direction', 'our_probability', 'market_price',
+                'edge', 'model_spread', 'confidence', 'ensemble_temp', 'outcome'
+            ])
+
+        writer.writerow([
+            datetime.now().isoformat(),
+            ticker,
+            target_date,
+            location,
+            threshold,
+            market_type,
+            direction,
+            f"{our_probability:.4f}",
+            f"{market_price:.4f}",
+            f"{edge:.4f}",
+            f"{model_spread:.2f}",
+            f"{confidence:.4f}",
+            f"{ensemble_temp:.1f}" if ensemble_temp else "",
+            ""  # outcome to be filled later
+        ])

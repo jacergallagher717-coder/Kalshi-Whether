@@ -21,7 +21,8 @@ from config.settings import (
     AUTO_TRADE_MAX_OPEN_POSITIONS, KALSHI_USE_DEMO,
     TRADING_CHECK_INTERVAL_MINUTES, MIN_EDGE_THRESHOLD,
     KALSHI_DEMO_URL, HIGH_EDGE_THRESHOLD, HIGH_EDGE_POSITION_PERCENT,
-    NORMAL_POSITION_PERCENT, MAX_CONTRACTS_PER_TRADE
+    NORMAL_POSITION_PERCENT, MAX_CONTRACTS_PER_TRADE,
+    CORRELATED_CITY_PAIRS, MAX_CORRELATED_EXPOSURE
 )
 from data.collectors.kalshi_client import KalshiClient, Order, Position
 from data.collectors.data_manager import DataManager
@@ -220,6 +221,89 @@ class AutoTrader:
             return f"{parts[0]}-{parts[1]}"
         return ticker
 
+    def _get_city_from_ticker(self, ticker: str) -> str:
+        """
+        Extract city code from ticker.
+
+        Example: KXHIGHDEN-26JAN08-B40 -> DEN
+        """
+        # Ticker format: KXHIGH{CITY}-DATE-... or KXLOW{CITY}-DATE-...
+        prefix = ticker.split('-')[0]
+        if 'HIGH' in prefix:
+            return prefix.replace('KXHIGH', '')
+        elif 'LOW' in prefix:
+            return prefix.replace('KXLOW', '')
+        return prefix[-3:]  # Last 3 chars as fallback
+
+    def _get_correlation(self, city1: str, city2: str) -> float:
+        """
+        Get correlation between two cities' weather.
+
+        QUANT AUDIT FIX: Weather in nearby cities is correlated.
+        """
+        if city1 == city2:
+            return 1.0
+
+        # Check both orderings
+        pair1 = (city1, city2)
+        pair2 = (city2, city1)
+
+        if pair1 in CORRELATED_CITY_PAIRS:
+            return CORRELATED_CITY_PAIRS[pair1]
+        if pair2 in CORRELATED_CITY_PAIRS:
+            return CORRELATED_CITY_PAIRS[pair2]
+
+        # Default low correlation for unspecified pairs
+        return 0.1
+
+    def _check_correlated_exposure(self, new_city: str, balance: float) -> tuple[bool, str]:
+        """
+        QUANT AUDIT FIX: Check if adding position would exceed correlated exposure limits.
+
+        Args:
+            new_city: City code for new position
+            balance: Current account balance
+
+        Returns:
+            Tuple of (can_trade, reason)
+        """
+        if not self.live_trading:
+            # For paper trading, check paper positions
+            positions = self.paper_trader.get_open_positions()
+        else:
+            try:
+                positions = self.trading_client.get_positions()
+            except Exception as e:
+                logger.warning(f"Could not check positions for correlation: {e}")
+                return True, "OK"
+
+        # Calculate current exposure to correlated cities
+        correlated_exposure = 0.0
+
+        for pos in positions:
+            pos_city = self._get_city_from_ticker(pos.ticker)
+            correlation = self._get_correlation(new_city, pos_city)
+
+            if correlation > 0.2:  # Only count significantly correlated positions
+                # Estimate position value (rough approximation)
+                if hasattr(pos, 'market_exposure'):
+                    pos_value = abs(pos.market_exposure) if pos.market_exposure else 0
+                elif hasattr(pos, 'contracts'):
+                    pos_value = pos.contracts * 0.50  # Rough avg contract value
+                else:
+                    pos_value = 5.0  # Default estimate
+
+                # Weight by correlation
+                correlated_exposure += pos_value * correlation
+
+        # Check against limit
+        if balance > 0:
+            correlated_pct = correlated_exposure / balance
+            if correlated_pct >= MAX_CORRELATED_EXPOSURE:
+                return False, f"CORRELATION LIMIT: {correlated_pct:.0%} exposure to correlated cities (max {MAX_CORRELATED_EXPOSURE:.0%})"
+
+        return True, "OK"
+
     def _calculate_position_size(self, signal: TradeSignal, balance: float) -> int:
         """
         Calculate dynamic position size based on edge and bankroll.
@@ -353,6 +437,21 @@ class AutoTrader:
         if city_date_prefix in self.traded_city_days_today:
             logger.info(f"SAFEGUARD: Already traded {city_date_prefix} today (multi-bracket prevention), skipping {ticker}")
             return False
+
+        # SAFEGUARD 2.5 (QUANT AUDIT FIX): Check correlated city exposure
+        new_city = self._get_city_from_ticker(ticker)
+        try:
+            if self.live_trading:
+                balance_info = self.trading_client.get_balance()
+                balance = balance_info.get('available_balance', 100) if balance_info else 100
+            else:
+                balance = 100  # Paper trading default
+            can_trade_corr, corr_reason = self._check_correlated_exposure(new_city, balance)
+            if not can_trade_corr:
+                logger.info(f"SAFEGUARD: {corr_reason} - skipping {ticker}")
+                return False
+        except Exception as e:
+            logger.warning(f"Could not check correlated exposure: {e}")
 
         # SAFEGUARD 3: Check if we already have a position OR resting order for this city/day
         if self.live_trading:

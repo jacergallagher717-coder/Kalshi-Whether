@@ -115,6 +115,42 @@ TEMP_UNCERTAINTY = {
     7: 10.0   # 7 days out: ±10°F std dev
 }
 
+# QUANT AUDIT FIX: Student's t-distribution for fat tails
+# Temperature forecast errors have fat tails - extreme errors occur more than normal dist predicts
+# Using t-distribution with ~6 degrees of freedom captures this better
+T_DISTRIBUTION_DF = float(os.getenv("T_DISTRIBUTION_DF", "6.0"))  # Degrees of freedom for t-dist
+
+# QUANT AUDIT FIX: Ensemble correlation adjustment
+# Weather models are NOT independent - they share physics, initial conditions, biases
+# Typical correlation between major models is 0.5-0.7
+ENSEMBLE_CORRELATION = float(os.getenv("ENSEMBLE_CORRELATION", "0.60"))  # Average model correlation
+
+# QUANT AUDIT FIX: Market efficiency discount
+# Markets aren't perfectly efficient, but they're not random either
+# This factor discounts our edge estimate to account for market information we don't have
+MARKET_EFFICIENCY_FACTOR = float(os.getenv("MARKET_EFFICIENCY_FACTOR", "0.70"))  # 70% of raw edge
+
+# QUANT AUDIT FIX: Model spread contribution to uncertainty
+# When models disagree, uncertainty is higher than base estimate
+# Add 50% of model spread to uncertainty
+MODEL_SPREAD_UNCERTAINTY_FACTOR = float(os.getenv("MODEL_SPREAD_UNCERTAINTY_FACTOR", "0.50"))
+
+# QUANT AUDIT FIX: Kelly confidence scaling
+# Full Kelly is dangerous when probability is estimated with error
+# Scale Kelly fraction by confidence score (more conservative when uncertain)
+KELLY_CONFIDENCE_SCALE = float(os.getenv("KELLY_CONFIDENCE_SCALE", "0.50"))  # Half Kelly scaled by confidence
+
+# QUANT AUDIT FIX: Correlated city pairs for position limits
+# Weather in nearby cities is correlated - don't over-bet on same weather pattern
+CORRELATED_CITY_PAIRS = {
+    ("NYC", "PHI"): 0.75,   # East Coast neighbors
+    ("LA", "LA"): 1.0,      # Same city (placeholder)
+    ("AUS", "MIA"): 0.30,   # Both warm/southern but different patterns
+    ("CHI", "DEN"): 0.25,   # Both continental but different
+    ("NYC", "MIA"): 0.20,   # Both east coast but very different climates
+}
+MAX_CORRELATED_EXPOSURE = float(os.getenv("MAX_CORRELATED_EXPOSURE", "0.20"))  # Max 20% in correlated cities
+
 # Data Collection Schedule
 COLLECTION_INTERVAL_MINUTES = 60  # Collect data every hour
 TRADING_CHECK_INTERVAL_MINUTES = 15  # Check for trades every 15 min

@@ -17,10 +17,10 @@ from config.settings import (
     MAX_MODEL_SPREAD, MIN_CONFIDENCE_SCORE, MIN_MODEL_AGREEMENT, MIN_MODELS_REQUIRED,
     MAX_FORECAST_DAYS, NEXT_DAY_EDGE_PENALTY,
     TRADING_WINDOW_ENABLED, TRADING_WINDOW_START_HOUR, TRADING_WINDOW_END_HOUR,
-    OVERNIGHT_EDGE_PENALTY,
+    OVERNIGHT_EDGE_PENALTY, MARKET_EFFICIENCY_FACTOR, KELLY_CONFIDENCE_SCALE,
     calculate_kalshi_fee, get_confidence_level
 )
-from utils.logger import get_logger
+from utils.logger import get_logger, log_prediction
 from utils.helpers import calculate_days_until, format_percent, format_currency
 from .probability import ensemble_probability, get_breakeven_temp
 from .ensemble import EnsembleModel
@@ -233,10 +233,15 @@ class EdgeCalculator:
         self,
         our_probability: float,
         entry_price: float,
-        direction: str
+        direction: str,
+        confidence: float = 1.0
     ) -> float:
         """
         Calculate optimal position size using Kelly Criterion.
+
+        QUANT AUDIT FIX: Scale Kelly by confidence score
+        Full Kelly is dangerous when probability is estimated with error.
+        We use fractional Kelly scaled by confidence.
 
         Kelly fraction = (bp - q) / b
         Where:
@@ -248,9 +253,10 @@ class EdgeCalculator:
             our_probability: Our probability estimate
             entry_price: Entry price
             direction: Trade direction
+            confidence: Confidence score (0-1) to scale Kelly
 
         Returns:
-            Kelly fraction (0-1), capped at 0.25 for safety
+            Kelly fraction (0-1), scaled by confidence and capped for safety
         """
         # Guard against division by zero at price extremes
         if entry_price <= 0.01 or entry_price >= 0.99:
@@ -271,8 +277,14 @@ class EdgeCalculator:
 
         kelly = (b * p - q) / b
 
-        # Cap at 25% of bankroll for safety (quarter Kelly)
-        return max(0.0, min(0.25, kelly))
+        # QUANT AUDIT FIX: Scale Kelly by confidence
+        # When uncertain, bet smaller to avoid over-betting on estimated probabilities
+        # KELLY_CONFIDENCE_SCALE (default 0.5) gives us half-Kelly as baseline
+        # Then multiply by confidence score (0-1)
+        scaled_kelly = kelly * KELLY_CONFIDENCE_SCALE * confidence
+
+        # Cap at 25% of bankroll for safety
+        return max(0.0, min(0.25, scaled_kelly))
 
     def determine_direction(
         self,
@@ -446,6 +458,10 @@ class EdgeCalculator:
         model_spread = prob_result["model_spread"]
         prob_confidence = prob_result["confidence"]
 
+        # QUANT AUDIT FIX: Extract conservative probability bounds
+        conservative_prob_low = prob_result.get("conservative_prob_low", our_probability)
+        conservative_prob_high = prob_result.get("conservative_prob_high", our_probability)
+
         # CONVICTION FILTER 1: Require minimum number of models
         num_models = len([t for t in forecasts.values() if t is not None])
         if num_models < MIN_MODELS_REQUIRED:
@@ -466,16 +482,35 @@ class EdgeCalculator:
                 logger.debug(f"Skipping {ticker}: model agreement {model_agreement_score:.0%} below {MIN_MODEL_AGREEMENT:.0%}")
                 return None
 
-        # Calculate edge
+        # Calculate edge using CONSERVATIVE probability bounds (QUANT AUDIT FIX)
+        # For BUY_YES: use lower bound of our probability (we might be overconfident)
+        # For BUY_NO: use upper bound of our probability (we might underestimate YES)
         raw_edge = self.calculate_edge(market_price, our_probability)
 
         # Determine trade direction
         trade_direction = self.determine_direction(our_probability, market_price)
 
+        # QUANT AUDIT FIX: Use conservative edge calculation
+        # Instead of point estimate, use the bound that gives us LESS edge
+        if trade_direction == "BUY_YES":
+            # We want YES to win - use lower bound of our probability
+            conservative_edge = conservative_prob_low - market_price
+        else:
+            # We want NO to win - use upper bound (market_price is YES price)
+            # If our upper bound for YES is still below market, we have edge on NO
+            conservative_edge = market_price - conservative_prob_high
+
+        # QUANT AUDIT FIX: Apply market efficiency discount
+        # Markets aren't perfectly efficient, but they're not random either
+        # This accounts for information we don't have
+        adjusted_edge = conservative_edge * MARKET_EFFICIENCY_FACTOR
+
         # Calculate directional edge (always positive from trade perspective)
-        # For BUY_YES: edge = our_prob - market_prob (positive means we like YES)
-        # For BUY_NO: edge = market_prob - our_prob (positive means we like NO)
-        edge = abs(raw_edge)
+        edge = max(0, adjusted_edge)
+
+        # Log the edge adjustments for transparency
+        logger.debug(f"{ticker}: Raw edge={raw_edge:.1%}, Conservative={conservative_edge:.1%}, "
+                    f"Market-adjusted={adjusted_edge:.1%}, Final={edge:.1%}")
 
         # PROBABILITY FILTER: Skip low-probability bets (long-shots lose too often)
         # Check the probability of the direction we're actually betting on
@@ -533,9 +568,9 @@ class EdgeCalculator:
         # Determine confidence level
         confidence = get_confidence_level(abs(edge))
 
-        # Calculate Kelly fraction
+        # Calculate Kelly fraction (QUANT AUDIT FIX: pass confidence to scale)
         kelly_fraction = self.calculate_kelly_fraction(
-            our_probability, market_price, trade_direction
+            our_probability, market_price, trade_direction, prob_confidence
         )
 
         # Calculate position size
@@ -593,6 +628,26 @@ class EdgeCalculator:
         )
 
         logger.info(str(signal))
+
+        # QUANT AUDIT FIX: Log prediction for Brier score validation
+        try:
+            log_prediction(
+                ticker=ticker,
+                target_date=str(target_date),
+                location=location,
+                threshold=temp_threshold,
+                market_type=market_type,
+                direction=trade_direction,
+                our_probability=our_probability,
+                market_price=market_price,
+                edge=edge,
+                model_spread=model_spread,
+                confidence=prob_confidence,
+                ensemble_temp=prob_result.get("ensemble_temp")
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log prediction: {e}")
+
         return signal
 
     def _generate_reasoning(
