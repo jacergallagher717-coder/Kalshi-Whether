@@ -3,24 +3,80 @@ Economic Nowcast Data Collectors
 
 Aggregates inflation/economic nowcasts from multiple sources:
 1. Cleveland Fed Inflation Nowcast (daily updates)
-2. NY Fed Staff Nowcast (weekly)
-3. Atlanta Fed GDPNow
-4. Wall Street Consensus estimates
+2. Atlanta Fed GDPNow (via FRED API)
+3. Manual consensus estimates
 
 These nowcasts update more frequently than monthly BLS releases,
 giving us fresher information than many market participants use.
+
+IMPORTANT: Before each trade, manually verify nowcast values at:
+- Cleveland Fed: https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting
+- Atlanta Fed: https://www.atlantafed.org/cqer/research/gdpnow
 """
 
 import requests
+import os
+import json
 from datetime import datetime, date
 from typing import Dict, Optional, List
 from dataclasses import dataclass
-from bs4 import BeautifulSoup
-import re
 
 from utils.logger import get_logger
 
 logger = get_logger("nowcast_collector")
+
+
+# ============================================================
+# MANUALLY UPDATED NOWCAST VALUES
+# ============================================================
+# Update these values before trading by checking the sources below.
+# These are used when automated fetching fails (which is often).
+#
+# CPI/PCE Source: https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting
+# GDP Source: https://www.atlantafed.org/cqer/research/gdpnow
+#
+# Last updated: 2026-01-26
+# ============================================================
+
+MANUAL_NOWCASTS = {
+    "cpi_headline": {
+        "value": 2.7,           # YoY % - check Cleveland Fed
+        "period": "2025-12",    # December 2025 (last reported)
+        "updated": "2026-01-26",
+        "source_url": "https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting"
+    },
+    "cpi_core": {
+        "value": 2.6,           # YoY % - check Cleveland Fed
+        "period": "2025-12",
+        "updated": "2026-01-26",
+        "source_url": "https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting"
+    },
+    "pce_headline": {
+        "value": 2.4,           # YoY % - check Cleveland Fed
+        "period": "2025-12",
+        "updated": "2026-01-26",
+        "source_url": "https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting"
+    },
+    "pce_core": {
+        "value": 2.5,           # YoY % - check Cleveland Fed
+        "period": "2025-12",
+        "updated": "2026-01-26",
+        "source_url": "https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting"
+    },
+    "gdp_nowcast": {
+        "value": 2.5,           # Annualized % - check Atlanta Fed GDPNow
+        "period": "2026Q1",
+        "updated": "2026-01-26",
+        "source_url": "https://www.atlantafed.org/cqer/research/gdpnow"
+    },
+    # NFP consensus - update before jobs report
+    "nfp_consensus": {
+        "value": 50,            # Thousands of jobs expected
+        "period": "2026-01",    # January 2026 report
+        "updated": "2026-01-26",
+        "source_url": "https://www.investing.com/economic-calendar/nonfarm-payrolls-227"
+    }
+}
 
 
 @dataclass
@@ -28,284 +84,145 @@ class NowcastData:
     """Container for nowcast data point."""
     source: str
     indicator: str  # "cpi_headline", "cpi_core", "pce_headline", "pce_core", "gdp"
-    value: float  # The nowcast value (e.g., 2.62 for 2.62% YoY)
-    period: str  # e.g., "2025-12" for December 2025
-    timestamp: datetime  # When we collected this
-    units: str  # "yoy_pct", "mom_pct", "annualized_pct"
+    value: float    # The nowcast value (e.g., 2.62 for 2.62% YoY)
+    period: str     # e.g., "2025-12" for December 2025
+    timestamp: datetime
+    units: str      # "yoy_pct", "mom_pct", "annualized_pct", "thousands"
 
     def __repr__(self):
-        return f"{self.source} {self.indicator}: {self.value:.2f}% ({self.period})"
+        return f"{self.source} {self.indicator}: {self.value:.2f} ({self.period})"
 
 
-class ClevelandFedCollector:
+class ManualNowcastCollector:
     """
-    Collects inflation nowcasts from Cleveland Fed.
+    Returns manually-updated nowcast values.
 
-    The Cleveland Fed provides daily nowcasts for:
-    - CPI (headline and core)
-    - PCE (headline and core)
+    This is the most reliable approach since automated scraping
+    of Fed websites is fragile and breaks frequently.
 
-    These update every business day and incorporate the latest
-    energy prices, PPI data, and other high-frequency indicators.
-
-    URL: https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting
+    BEFORE EACH TRADE: Update the MANUAL_NOWCASTS dict at the top
+    of this file with current values from the source URLs.
     """
 
-    BASE_URL = "https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting"
+    def __init__(self, cache_file: str = "./data/nowcast_cache.json"):
+        self.cache_file = cache_file
+        self._load_cache()
 
-    # API endpoint for the nowcast data (JSON)
-    # Note: This may need to be discovered via browser dev tools
-    API_URL = "https://www.clevelandfed.org/api/inflation-nowcasting/data"
+    def _load_cache(self):
+        """Load cached values if they exist and are fresher than hardcoded."""
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r') as f:
+                    cached = json.load(f)
+                    # Merge cached values (they override hardcoded if newer)
+                    for key, val in cached.items():
+                        if key in MANUAL_NOWCASTS:
+                            cached_date = val.get('updated', '2000-01-01')
+                            hardcoded_date = MANUAL_NOWCASTS[key].get('updated', '2000-01-01')
+                            if cached_date > hardcoded_date:
+                                MANUAL_NOWCASTS[key] = val
+            except Exception as e:
+                logger.warning(f"Could not load nowcast cache: {e}")
 
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        })
-
-    def get_latest_nowcast(self) -> List[NowcastData]:
+    def update_nowcast(self, indicator: str, value: float, period: str = None):
         """
-        Fetch the latest Cleveland Fed inflation nowcasts.
+        Update a nowcast value (saves to cache file).
 
-        Returns list of NowcastData for CPI/PCE headline and core.
+        Usage:
+            collector = ManualNowcastCollector()
+            collector.update_nowcast("cpi_headline", 2.75, "2026-01")
         """
-        nowcasts = []
+        if indicator not in MANUAL_NOWCASTS:
+            MANUAL_NOWCASTS[indicator] = {}
 
-        try:
-            # Try to fetch from their data API first
-            response = self.session.get(self.API_URL, timeout=30)
-
-            if response.status_code == 200:
-                data = response.json()
-                nowcasts = self._parse_api_response(data)
-            else:
-                # Fall back to scraping the HTML page
-                logger.warning(f"API returned {response.status_code}, trying HTML scrape")
-                nowcasts = self._scrape_html()
-
-        except requests.RequestException as e:
-            logger.error(f"Cleveland Fed fetch failed: {e}")
-            # Return cached/fallback data if available
-            nowcasts = self._get_fallback_data()
-        except Exception as e:
-            logger.error(f"Cleveland Fed parse error: {e}")
-            nowcasts = self._get_fallback_data()
-
-        return nowcasts
-
-    def _parse_api_response(self, data: dict) -> List[NowcastData]:
-        """Parse the JSON API response."""
-        nowcasts = []
-        timestamp = datetime.utcnow()
-
-        # Structure depends on their API format
-        # This is a placeholder - actual parsing depends on their response structure
-        if 'cpi' in data:
-            cpi_data = data['cpi']
-            if 'headline' in cpi_data:
-                nowcasts.append(NowcastData(
-                    source="cleveland_fed",
-                    indicator="cpi_headline",
-                    value=float(cpi_data['headline']['yoy']),
-                    period=cpi_data['headline']['period'],
-                    timestamp=timestamp,
-                    units="yoy_pct"
-                ))
-            if 'core' in cpi_data:
-                nowcasts.append(NowcastData(
-                    source="cleveland_fed",
-                    indicator="cpi_core",
-                    value=float(cpi_data['core']['yoy']),
-                    period=cpi_data['core']['period'],
-                    timestamp=timestamp,
-                    units="yoy_pct"
-                ))
-
-        return nowcasts
-
-    def _scrape_html(self) -> List[NowcastData]:
-        """
-        Scrape nowcast values from the HTML page.
-
-        This is a fallback if the API isn't available.
-        """
-        nowcasts = []
-        timestamp = datetime.utcnow()
-
-        try:
-            response = self.session.get(self.BASE_URL, timeout=30)
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # Look for the nowcast values in the page
-            # The exact selectors depend on their HTML structure
-            # This is a template that needs to be adapted
-
-            # Example: find elements with specific data attributes or classes
-            cpi_elements = soup.find_all(attrs={'data-indicator': 'cpi'})
-
-            for elem in cpi_elements:
-                value_text = elem.get_text(strip=True)
-                # Parse the value (e.g., "2.62%" -> 2.62)
-                match = re.search(r'([\d.]+)%?', value_text)
-                if match:
-                    value = float(match.group(1))
-                    indicator = elem.get('data-type', 'cpi_headline')
-                    period = elem.get('data-period', self._current_period())
-
-                    nowcasts.append(NowcastData(
-                        source="cleveland_fed",
-                        indicator=indicator,
-                        value=value,
-                        period=period,
-                        timestamp=timestamp,
-                        units="yoy_pct"
-                    ))
-
-        except Exception as e:
-            logger.error(f"HTML scrape failed: {e}")
-
-        return nowcasts
-
-    def _get_fallback_data(self) -> List[NowcastData]:
-        """
-        Return fallback/cached data when live fetch fails.
-
-        In production, this would read from a local cache.
-        """
-        logger.warning("Using fallback nowcast data")
-        timestamp = datetime.utcnow()
-
-        # These are example values - in production, use cached real data
-        return [
-            NowcastData(
-                source="cleveland_fed_fallback",
-                indicator="cpi_headline",
-                value=2.7,  # Update with latest known value
-                period=self._current_period(),
-                timestamp=timestamp,
-                units="yoy_pct"
-            ),
-            NowcastData(
-                source="cleveland_fed_fallback",
-                indicator="cpi_core",
-                value=2.6,
-                period=self._current_period(),
-                timestamp=timestamp,
-                units="yoy_pct"
-            )
-        ]
-
-    def _current_period(self) -> str:
-        """Get current period string (e.g., '2026-01')."""
         today = date.today()
-        # Nowcasts are typically for the previous month
-        if today.month == 1:
-            return f"{today.year - 1}-12"
-        return f"{today.year}-{today.month - 1:02d}"
+        MANUAL_NOWCASTS[indicator]['value'] = value
+        MANUAL_NOWCASTS[indicator]['period'] = period or f"{today.year}-{today.month:02d}"
+        MANUAL_NOWCASTS[indicator]['updated'] = str(today)
 
+        # Save to cache
+        self._save_cache()
+        logger.info(f"Updated {indicator} to {value} for period {period}")
 
-class NYFedCollector:
-    """
-    Collects GDP/economic nowcasts from NY Fed Staff Nowcast.
-
-    Updates weekly (Fridays), provides:
-    - GDP growth nowcast
-    - Key economic indicator impacts
-
-    URL: https://www.newyorkfed.org/research/policy/nowcast
-    """
-
-    BASE_URL = "https://www.newyorkfed.org/research/policy/nowcast"
-
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        })
-
-    def get_latest_nowcast(self) -> List[NowcastData]:
-        """Fetch the latest NY Fed GDP nowcast."""
-        nowcasts = []
-        timestamp = datetime.utcnow()
-
+    def _save_cache(self):
+        """Save current values to cache file."""
         try:
-            response = self.session.get(self.BASE_URL, timeout=30)
-
-            if response.status_code == 200:
-                nowcasts = self._parse_response(response.text)
-            else:
-                logger.warning(f"NY Fed returned {response.status_code}")
-
+            os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+            with open(self.cache_file, 'w') as f:
+                json.dump(MANUAL_NOWCASTS, f, indent=2)
         except Exception as e:
-            logger.error(f"NY Fed fetch failed: {e}")
+            logger.error(f"Could not save nowcast cache: {e}")
 
+    def get_nowcast(self, indicator: str) -> Optional[NowcastData]:
+        """Get a specific nowcast value."""
+        if indicator not in MANUAL_NOWCASTS:
+            return None
+
+        data = MANUAL_NOWCASTS[indicator]
+
+        # Determine units based on indicator type
+        if 'gdp' in indicator.lower():
+            units = "annualized_pct"
+        elif 'nfp' in indicator.lower() or 'jobs' in indicator.lower():
+            units = "thousands"
+        else:
+            units = "yoy_pct"
+
+        return NowcastData(
+            source="manual",
+            indicator=indicator,
+            value=data['value'],
+            period=data['period'],
+            timestamp=datetime.utcnow(),
+            units=units
+        )
+
+    def get_all_nowcasts(self) -> List[NowcastData]:
+        """Get all available nowcasts."""
+        nowcasts = []
+        for indicator in MANUAL_NOWCASTS:
+            nc = self.get_nowcast(indicator)
+            if nc:
+                nowcasts.append(nc)
         return nowcasts
 
-    def _parse_response(self, html: str) -> List[NowcastData]:
-        """Parse the NY Fed nowcast page."""
-        nowcasts = []
-        timestamp = datetime.utcnow()
-
-        try:
-            soup = BeautifulSoup(html, 'html.parser')
-
-            # Look for GDP nowcast value
-            # The exact parsing depends on their HTML structure
-            # This is a template
-
-            gdp_text = soup.find(text=re.compile(r'GDP.*nowcast', re.I))
-            if gdp_text:
-                # Find nearby number
-                parent = gdp_text.parent
-                value_match = re.search(r'([\d.]+)%', parent.get_text())
-                if value_match:
-                    nowcasts.append(NowcastData(
-                        source="ny_fed",
-                        indicator="gdp_nowcast",
-                        value=float(value_match.group(1)),
-                        period=self._current_quarter(),
-                        timestamp=timestamp,
-                        units="annualized_pct"
-                    ))
-
-        except Exception as e:
-            logger.error(f"NY Fed parse error: {e}")
-
-        return nowcasts
-
-    def _current_quarter(self) -> str:
-        """Get current quarter string (e.g., '2026Q1')."""
+    def check_freshness(self) -> Dict[str, bool]:
+        """Check if nowcasts are fresh (updated within last 3 days)."""
         today = date.today()
-        quarter = (today.month - 1) // 3 + 1
-        return f"{today.year}Q{quarter}"
+        freshness = {}
+
+        for indicator, data in MANUAL_NOWCASTS.items():
+            updated_str = data.get('updated', '2000-01-01')
+            try:
+                updated = datetime.strptime(updated_str, '%Y-%m-%d').date()
+                days_old = (today - updated).days
+                freshness[indicator] = days_old <= 3
+            except:
+                freshness[indicator] = False
+
+        return freshness
 
 
 class AtlantaFedGDPNow:
     """
-    Collects GDP nowcast from Atlanta Fed GDPNow model.
+    Fetches GDP nowcast from Atlanta Fed via FRED API.
 
-    Updates frequently (multiple times per week), provides:
-    - Real GDP growth nowcast for current quarter
-
-    URL: https://www.atlantafed.org/cqer/research/gdpnow
+    This one actually works with the FRED API!
+    Get a free API key at: https://fred.stlouisfed.org/docs/api/api_key.html
     """
 
-    # GDPNow is available via FRED API
     FRED_SERIES = "GDPNOW"
     FRED_URL = "https://api.stlouisfed.org/fred/series/observations"
 
-    def __init__(self, fred_api_key: str = None):
-        self.api_key = fred_api_key
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or os.getenv("FRED_API_KEY")
         self.session = requests.Session()
 
-    def get_latest_nowcast(self) -> List[NowcastData]:
+    def get_latest_nowcast(self) -> Optional[NowcastData]:
         """Fetch latest GDPNow from FRED API."""
         if not self.api_key:
-            logger.warning("No FRED API key configured")
-            return []
-
-        nowcasts = []
-        timestamp = datetime.utcnow()
+            logger.debug("No FRED API key - using manual GDP nowcast")
+            return None
 
         try:
             params = {
@@ -322,111 +239,55 @@ class AtlantaFedGDPNow:
                 data = response.json()
                 if data.get('observations'):
                     obs = data['observations'][0]
-                    nowcasts.append(NowcastData(
-                        source="atlanta_fed",
+                    value = float(obs['value'])
+
+                    logger.info(f"Fetched GDPNow from FRED: {value}%")
+
+                    return NowcastData(
+                        source="atlanta_fed_fred",
                         indicator="gdp_nowcast",
-                        value=float(obs['value']),
+                        value=value,
                         period=obs['date'],
-                        timestamp=timestamp,
+                        timestamp=datetime.utcnow(),
                         units="annualized_pct"
-                    ))
-
+                    )
         except Exception as e:
-            logger.error(f"Atlanta Fed GDPNow fetch failed: {e}")
+            logger.error(f"FRED API error: {e}")
 
-        return nowcasts
-
-
-class ConsensusCollector:
-    """
-    Aggregates Wall Street consensus forecasts.
-
-    Sources:
-    - Bloomberg consensus
-    - Reuters polls
-    - MarketWatch consensus
-
-    These are typically available just before major releases.
-    """
-
-    def __init__(self):
-        self.session = requests.Session()
-
-    def get_consensus(self, indicator: str, period: str) -> Optional[NowcastData]:
-        """
-        Get Wall Street consensus for an indicator.
-
-        Args:
-            indicator: "cpi_headline", "cpi_core", "nfp", etc.
-            period: "2026-01" for January 2026
-
-        Returns:
-            NowcastData with consensus value, or None
-        """
-        # In production, this would scrape from financial news sources
-        # or use a data provider API (Bloomberg, Refinitiv, etc.)
-
-        logger.info(f"Consensus lookup for {indicator} {period} - not implemented")
         return None
 
 
 class NowcastAggregator:
     """
-    Main class that aggregates all nowcast sources into a single view.
+    Main class that aggregates all nowcast sources.
 
-    Computes weighted average and spread across sources.
+    Primary source: Manual values (most reliable)
+    Secondary source: FRED API for GDP (if API key configured)
     """
 
     def __init__(self, fred_api_key: str = None):
-        self.cleveland = ClevelandFedCollector()
-        self.nyfed = NYFedCollector()
+        self.manual = ManualNowcastCollector()
         self.atlanta = AtlantaFedGDPNow(fred_api_key)
-        self.consensus = ConsensusCollector()
-
-        # Weights for combining sources (based on historical accuracy)
-        self.weights = {
-            'cleveland_fed': 0.40,  # Best for CPI nowcasting
-            'ny_fed': 0.30,
-            'atlanta_fed': 0.30,
-            'consensus': 0.20
-        }
 
     def get_all_nowcasts(self) -> Dict[str, List[NowcastData]]:
-        """
-        Fetch nowcasts from all sources.
-
-        Returns dict keyed by indicator with list of nowcasts from each source.
-        """
+        """Get all nowcasts, grouped by indicator."""
         all_nowcasts = {}
 
-        # Collect from all sources
-        for nowcast in self.cleveland.get_latest_nowcast():
-            if nowcast.indicator not in all_nowcasts:
-                all_nowcasts[nowcast.indicator] = []
-            all_nowcasts[nowcast.indicator].append(nowcast)
+        # Get manual nowcasts
+        for nc in self.manual.get_all_nowcasts():
+            if nc.indicator not in all_nowcasts:
+                all_nowcasts[nc.indicator] = []
+            all_nowcasts[nc.indicator].append(nc)
 
-        for nowcast in self.nyfed.get_latest_nowcast():
-            if nowcast.indicator not in all_nowcasts:
-                all_nowcasts[nowcast.indicator] = []
-            all_nowcasts[nowcast.indicator].append(nowcast)
-
-        for nowcast in self.atlanta.get_latest_nowcast():
-            if nowcast.indicator not in all_nowcasts:
-                all_nowcasts[nowcast.indicator] = []
-            all_nowcasts[nowcast.indicator].append(nowcast)
+        # Try to get live GDP from FRED (overrides manual if successful)
+        gdp = self.atlanta.get_latest_nowcast()
+        if gdp:
+            all_nowcasts['gdp_nowcast'] = [gdp]
 
         return all_nowcasts
 
     def get_aggregate_nowcast(self, indicator: str) -> Optional[Dict]:
-        """
-        Get weighted aggregate nowcast for an indicator.
-
-        Returns dict with:
-        - aggregate_value: Weighted average
-        - spread: Max - Min across sources
-        - sources: Individual source values
-        - confidence: Based on source agreement
-        """
+        """Get nowcast for a specific indicator."""
         all_nowcasts = self.get_all_nowcasts()
 
         if indicator not in all_nowcasts or not all_nowcasts[indicator]:
@@ -434,62 +295,76 @@ class NowcastAggregator:
 
         nowcasts = all_nowcasts[indicator]
 
-        # Calculate weighted average
-        total_weight = 0
-        weighted_sum = 0
-        values = []
+        # For now, just use the first (and usually only) value
+        nc = nowcasts[0]
 
-        for nc in nowcasts:
-            weight = self.weights.get(nc.source, 0.25)
-            weighted_sum += nc.value * weight
-            total_weight += weight
-            values.append(nc.value)
-
-        if total_weight == 0:
-            return None
-
-        aggregate = weighted_sum / total_weight
-        spread = max(values) - min(values) if len(values) > 1 else 0
-
-        # Confidence is higher when sources agree
-        confidence = max(0.3, 1.0 - spread / 1.0)  # 1% spread = 0% confidence boost
+        # Check freshness
+        freshness = self.manual.check_freshness()
+        is_fresh = freshness.get(indicator, False)
 
         return {
             'indicator': indicator,
-            'aggregate_value': round(aggregate, 2),
-            'spread': round(spread, 2),
-            'num_sources': len(nowcasts),
-            'sources': {nc.source: nc.value for nc in nowcasts},
-            'confidence': round(confidence, 2),
+            'aggregate_value': nc.value,
+            'spread': 0,  # Only one source
+            'num_sources': 1,
+            'sources': {nc.source: nc.value},
+            'confidence': 0.8 if is_fresh else 0.5,
+            'is_fresh': is_fresh,
+            'period': nc.period,
             'timestamp': datetime.utcnow()
         }
 
+    def print_status(self):
+        """Print current nowcast status (for daily scan)."""
+        print("\n=== CURRENT NOWCASTS ===")
+        print("(Update these before trading at the source URLs)")
+        print()
 
-# Convenience function
+        freshness = self.manual.check_freshness()
+
+        for indicator, data in MANUAL_NOWCASTS.items():
+            fresh = "✓ FRESH" if freshness.get(indicator) else "⚠️ STALE"
+            print(f"  {indicator}:")
+            print(f"    Value: {data['value']}")
+            print(f"    Period: {data['period']}")
+            print(f"    Updated: {data['updated']} [{fresh}]")
+            print(f"    Source: {data['source_url']}")
+            print()
+
+
+# Convenience functions
 def get_cpi_nowcast() -> Optional[Dict]:
-    """Quick function to get current CPI nowcast aggregate."""
-    aggregator = NowcastAggregator()
-    return aggregator.get_aggregate_nowcast('cpi_headline')
+    """Quick function to get current CPI nowcast."""
+    agg = NowcastAggregator()
+    return agg.get_aggregate_nowcast('cpi_headline')
+
+
+def update_nowcast(indicator: str, value: float, period: str = None):
+    """Quick function to update a nowcast value."""
+    collector = ManualNowcastCollector()
+    collector.update_nowcast(indicator, value, period)
 
 
 if __name__ == "__main__":
-    # Test the collectors
-    print("Testing Cleveland Fed Collector...")
-    cleveland = ClevelandFedCollector()
-    nowcasts = cleveland.get_latest_nowcast()
-    for nc in nowcasts:
-        print(f"  {nc}")
+    print("=" * 60)
+    print("  NOWCAST STATUS CHECK")
+    print("=" * 60)
 
-    print("\nTesting NY Fed Collector...")
-    nyfed = NYFedCollector()
-    nowcasts = nyfed.get_latest_nowcast()
-    for nc in nowcasts:
-        print(f"  {nc}")
-
-    print("\nTesting Aggregator...")
     agg = NowcastAggregator()
-    cpi = agg.get_aggregate_nowcast('cpi_headline')
-    if cpi:
-        print(f"  CPI Headline Nowcast: {cpi['aggregate_value']}%")
-        print(f"  Spread: {cpi['spread']}%")
-        print(f"  Sources: {cpi['sources']}")
+    agg.print_status()
+
+    print("=" * 60)
+    print("  TO UPDATE VALUES:")
+    print("=" * 60)
+    print()
+    print("  Option 1: Edit MANUAL_NOWCASTS in this file directly")
+    print()
+    print("  Option 2: Use Python:")
+    print("    from data.collectors.nowcast_collector import update_nowcast")
+    print("    update_nowcast('cpi_headline', 2.75, '2026-01')")
+    print()
+    print("  Before each trade, check:")
+    print("  - CPI/PCE: https://www.clevelandfed.org/indicators-and-data/inflation-nowcasting")
+    print("  - GDP: https://www.atlantafed.org/cqer/research/gdpnow")
+    print("  - NFP consensus: https://www.investing.com/economic-calendar/")
+    print()
